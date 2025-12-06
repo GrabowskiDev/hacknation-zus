@@ -13,6 +13,13 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.output_parsers import PydanticOutputParser, StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
+import io
+import zipfile
+from fastapi.responses import StreamingResponse
+from docx import Document as DocxDocument
+from docx.shared import Pt
+from fpdf import FPDF
+
 from ocr import extract_text_from_image, summarize_accident_facts_from_pdfs
 
 
@@ -966,6 +973,201 @@ async def read_document_ocr(file: UploadFile = File(...)) -> dict:
         "text": text,
     }
 
+
+
+# --- GENEROWANIE DOKUMENTÓW ---
+
+class PDF(FPDF):
+    def header(self):
+        # Prosty nagłówek PDF
+        self.set_font('Arial', 'B', 12)
+        self.cell(0, 10, 'Dokument wygenerowany przez asystenta ZANT', 0, 1, 'C')
+        self.ln(10)
+
+def sanitize_text(text: Optional[str]) -> str:
+    """Czyści tekst z None i obsługuje polskie znaki dla prostego PDF."""
+    if text is None:
+        return "---"
+    return text
+
+def create_notification_docx(state: CaseState) -> io.BytesIO:
+    """Tworzy plik Word z Zawiadomieniem o wypadku."""
+    doc = DocxDocument()
+    
+    doc.add_heading('ZAWIADOMIENIE O WYPADKU', 0)
+    doc.add_heading('przy prowadzeniu działalności gospodarczej', 1)
+
+    # Sekcja 1: Poszkodowany
+    doc.add_heading('1. Dane poszkodowanego (Zgłaszającego)', level=2)
+    p = doc.add_paragraph()
+    p.add_run(f"Imię i nazwisko: ").bold = True
+    p.add_run(f"{sanitize_text(state.first_name)} {sanitize_text(state.last_name)}\n")
+    p.add_run(f"PESEL: ").bold = True
+    p.add_run(f"{sanitize_text(state.pesel)}\n")
+    p.add_run(f"Adres zamieszkania: ").bold = True
+    p.add_run(f"{sanitize_text(state.address_home)}")
+
+    # Sekcja 2: Płatnik składek
+    doc.add_heading('2. Dane płatnika składek (Działalność)', level=2)
+    p = doc.add_paragraph()
+    p.add_run(f"Nazwa/Opis: ").bold = True
+    p.add_run(f"{sanitize_text(state.business_description)}\n")
+    p.add_run(f"NIP: ").bold = True
+    p.add_run(f"{sanitize_text(state.nip)}   ")
+    p.add_run(f"REGON: ").bold = True
+    p.add_run(f"{sanitize_text(state.regon)}\n")
+    p.add_run(f"Adres działalności: ").bold = True
+    p.add_run(f"{sanitize_text(state.business_address)}")
+
+    # Sekcja 3: Informacje o wypadku
+    doc.add_heading('3. Informacje o wypadku', level=2)
+    p = doc.add_paragraph()
+    p.add_run(f"Data i godzina: ").bold = True
+    p.add_run(f"{sanitize_text(state.accident_date)}, godz. {sanitize_text(state.accident_time)}\n")
+    p.add_run(f"Miejsce wypadku: ").bold = True
+    p.add_run(f"{sanitize_text(state.accident_place)}\n")
+    p.add_run(f"Rodzaj urazu: ").bold = True
+    p.add_run(f"{sanitize_text(state.injury_type)}")
+
+    doc.add_heading('Okoliczności i przyczyny wypadku:', level=3)
+    doc.add_paragraph(sanitize_text(state.accident_description))
+
+    # Sekcja 4: Świadkowie
+    if state.witnesses:
+        doc.add_heading('4. Świadkowie', level=2)
+        for i, w in enumerate(state.witnesses, 1):
+            doc.add_paragraph(f"{i}. {w.first_name} {w.last_name}, adres: {w.address or 'brak'}")
+    
+    doc.add_paragraph("\n\n......................................................\n(podpis zgłaszającego)")
+
+    # Zapis do bufora
+    file_stream = io.BytesIO()
+    doc.save(file_stream)
+    file_stream.seek(0)
+    return file_stream
+
+def create_explanation_docx(state: CaseState) -> io.BytesIO:
+    """Tworzy plik Word z Wyjaśnieniami poszkodowanego."""
+    doc = DocxDocument()
+    doc.add_heading('ZAPIS WYJAŚNIEŃ POSZKODOWANEGO', 0)
+
+    p = doc.add_paragraph()
+    p.add_run(f"Ja, niżej podpisany/a: ").bold = True
+    p.add_run(f"{sanitize_text(state.first_name)} {sanitize_text(state.last_name)}\n")
+    
+    doc.add_heading('Treść wyjaśnień:', level=2)
+    # Tutaj wstawiamy opis wypadku jako główne wyjaśnienie
+    doc.add_paragraph(sanitize_text(state.accident_description))
+
+    if state.equipment_info:
+         doc.add_heading('Informacje dodatkowe (maszyny, BHP):', level=3)
+         doc.add_paragraph(state.equipment_info)
+
+    doc.add_paragraph("\n\nOświadczam, że powyższe wyjaśnienia są zgodne z prawdą.")
+    doc.add_paragraph("\n......................................................\n(data i podpis)")
+
+    file_stream = io.BytesIO()
+    doc.save(file_stream)
+    file_stream.seek(0)
+    return file_stream
+
+def create_simple_pdf(title: str, content_dict: dict) -> io.BytesIO:
+    """
+    Tworzy prosty PDF. 
+    UWAGA: FPDF standardowo nie obsługuje polskich znaków bez wgrania czcionki TTF (np. DejaVuSans).
+    Dla celów hackathonu używamy standardowej czcionki i zamieniamy polskie znaki lub
+    wymagane jest dodanie pliku .ttf do projektu.
+    Tu użyjemy Windows-1250 encoding trick lub prostej transkrypcji, aby kod działał out-of-the-box.
+    """
+    pdf = PDF()
+    pdf.add_page()
+    
+    # Dodanie obsługi polskich znaków wymagałoby pliku .ttf, np:
+    # pdf.add_font('DejaVu', '', 'DejaVuSans.ttf', uni=True)
+    # pdf.set_font('DejaVu', '', 12)
+    
+    # Fallback dla standardowego Ariala (może krzaczyć polskie znaki)
+    pdf.set_font("Arial", size=12)
+    
+    pdf.cell(0, 10, title, ln=True, align='C')
+    pdf.ln(10)
+
+    for key, value in content_dict.items():
+        # Bardzo proste czyszczenie znaków, jeśli nie mamy czcionki UTF-8
+        # W produkcji: użyj reportlab lub załaduj czcionkę TTF w FPDF
+        clean_key = key
+        clean_val = str(value).replace('\u0105', 'a').replace('\u0107', 'c').replace('\u0119', 'e').replace('\u0142', 'l').replace('\u0144', 'n').replace('\u00f3', 'o').replace('\u015b', 's').replace('\u0179', 'Z').replace('\u017b', 'Z')
+        
+        pdf.set_font("Arial", 'B', 10)
+        pdf.cell(0, 5, clean_key, ln=True)
+        pdf.set_font("Arial", '', 10)
+        pdf.multi_cell(0, 5, clean_val)
+        pdf.ln(2)
+
+    output = io.BytesIO()
+    # output.write(pdf.output(dest='S').encode('latin-1')) # FPDF2 zwraca bytearray
+    output.write(pdf.output())
+    output.seek(0)
+    return output
+
+
+@app.post("/api/case/download-documents")
+async def download_documents(case_state: CaseState):
+    """
+    Generuje komplet dokumentów (Zawiadomienie DOCX/PDF, Wyjaśnienia DOCX/PDF)
+    i zwraca je jako jeden plik ZIP.
+    """
+    
+    # 1. Przygotuj bufory plików
+    files_to_zip = []
+
+    # --- Zawiadomienie DOCX ---
+    docx_notification = create_notification_docx(case_state)
+    files_to_zip.append(("zawiadomienie_o_wypadku.docx", docx_notification))
+
+    # --- Wyjaśnienia DOCX ---
+    # Generujemy tylko jeśli jest opis
+    if case_state.accident_description:
+        docx_explanation = create_explanation_docx(case_state)
+        files_to_zip.append(("wyjasnienia_poszkodowanego.docx", docx_explanation))
+
+    # --- PDFy (wersja uproszczona) ---
+    # Przygotowanie danych do zrzutu PDF
+    notification_data = {
+        "Poszkodowany": f"{case_state.first_name} {case_state.last_name}, PESEL: {case_state.pesel}",
+        "Data wypadku": f"{case_state.accident_date} {case_state.accident_time}",
+        "Opis": case_state.accident_description or "",
+        "Miejsce": case_state.accident_place or ""
+    }
+    pdf_notification = create_simple_pdf("Zawiadomienie (Draft PDF)", notification_data)
+    files_to_zip.append(("zawiadomienie_o_wypadku.pdf", pdf_notification))
+
+    if case_state.accident_description:
+        explanation_data = {
+            "Imie i nazwisko": f"{case_state.first_name} {case_state.last_name}",
+            "Tresc wyjasnien": case_state.accident_description
+        }
+        pdf_explanation = create_simple_pdf("Wyjasnienia (Draft PDF)", explanation_data)
+        files_to_zip.append(("wyjasnienia.pdf", pdf_explanation))
+
+    # 2. Spakuj do ZIP
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        for filename, file_stream in files_to_zip:
+            # Upewnij się, że kursor jest na początku
+            # (choć create_... funkcje już to robią)
+            file_stream.seek(0)
+            zip_file.writestr(filename, file_stream.read())
+
+    zip_buffer.seek(0)
+
+    # 3. Zwróć jako streaming response
+    filename = f"dokumenty_wypadkowe_{case_state.last_name or 'nieznany'}.zip"
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
 
 @app.post("/api/ocr/summarize-accident-facts")
 async def summarize_accident_facts(files: List[UploadFile] = File(...)) -> dict:
