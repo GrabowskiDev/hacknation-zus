@@ -5,7 +5,7 @@ import ConversationalForm from "./chat/ConversationalForm";
 import { theme } from "/theme";
 
 import { ThemeProvider } from "@emotion/react";
-import { CssBaseline, StyledEngineProvider } from "@mui/material";
+import { CssBaseline } from "@mui/material";
 import ZusForm from "./zus_form/ZusForm";
 import { ChatProvider } from "./context/ChatContext";
 
