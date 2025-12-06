@@ -2,6 +2,36 @@ import type { FormSectionConfig, Witness } from "@/types";
 
 export const formConfig: FormSectionConfig[] = [
   {
+    title: "Dane zgłaszającego",
+    fields: [
+      {
+        key: "reporter_type",
+        label: "Kto zgłasza wypadek?",
+        type: "select",
+        options: [
+          { value: "victim", label: "Poszkodowany (osobiście)" },
+          { value: "proxy", label: "Pełnomocnik" },
+        ],
+      },
+      // To pole ma sens logiczny tylko gdy wybrano pełnomocnika.
+      // W prostym formularzu możemy je wyświetlić zawsze lub obsłużyć ukrywanie w komponencie.
+      // Tutaj zakładamy wersję prostą (Select Tak/Nie).
+      {
+        key: "proxy_document_attached",
+        label: "Czy załączono pełnomocnictwo?",
+        type: "select",
+        options: [
+          { value: "true", label: "Tak" },
+          { value: "false", label: "Nie" },
+        ],
+        // Parser zamienia stringi na boolean dla backendu (jeśli useFormSync tego używa)
+        parse: (val) => val === "true",
+        format: (val) => (val ? "true" : "false"),
+      },
+    ],
+  },
+
+  {
     title: "Dane poszkodowanego",
     fields: [
       { key: "first_name", label: "Imię", type: "text" },

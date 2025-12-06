@@ -4,6 +4,7 @@ import os
 from enum import Enum
 from typing import Any, List, Optional
 from datetime import date
+from unittest import result
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,8 +29,14 @@ class Witness(BaseModel):
     last_name: str = Field(..., description="Nazwisko świadka")
     address: Optional[str] = Field(None, description="Adres świadka")
 
+class ReporterType(str, Enum):
+    VICTIM = "victim"
+    PROXY = "proxy"
 
 class CaseState(BaseModel):
+    reporter_type: Optional[ReporterType] = None # Kto zgłasza?
+    proxy_document_attached: bool = False
+
     # Dane poszkodowanego
     pesel: Optional[str] = None
     first_name: Optional[str] = None
@@ -255,6 +262,13 @@ def simple_missing_fields(
 
     skipped = set(skipped_fields or [])
     result: List[MissingField] = []
+
+    if case_state.reporter_type == ReporterType.PROXY and not case_state.proxy_document_attached:
+        result.append(MissingField(
+            field="proxy_document", 
+            reason="W przypadku zgłoszenia przez pełnomocnika wymagane jest załączenie pełnomocnictwa."
+        ))
+
     for field_name in required:
         if field_name in skipped:
             continue
@@ -751,6 +765,7 @@ def run_assistant_pipeline(
     # Kolejność WSZYSTKICH pól, o które chcemy po kolei pytać,
     # tak długo jak użytkownik nie odmówi (skipped_fields) i pole jest puste.
     question_order = [
+        "reporter_type",
         # Dane poszkodowanego
         "first_name",
         "last_name",
@@ -788,45 +803,63 @@ def run_assistant_pipeline(
             break
 
     if next_field:
-        category = find_category_for_field(next_field)
-        if category is not None:
-            _, category_label, category_fields = category
-            # W tej kategorii pytamy tylko o pola, które nadal są puste
-            # (i nie zostały oznaczone jako pominięte).
-            missing_in_category = []
-            for name in category_fields:
-                if name in skipped:
-                    continue
-                value = getattr(case_state, name, None)
-                if value is None or (isinstance(value, str) and not value.strip()):
-                    missing_in_category.append(name)
-
-            labels = [human_field_label(name) for name in missing_in_category]
-            fields_list = ", ".join(labels)
-
-            # Pierwsza interakcja — przedstaw zasady raz na początku.
-            if not history:
-                assistant_reply = (
-                    "Dzień dobry! Opisz proszę, co się wydarzyło.\n\n"
-                    "Potem przejdziemy po kilku grupach pytań potrzebnych do formularza. "
-                    "Możesz mówić swobodnie, tak jak Ci wygodnie – jeśli czegoś nie chcesz podawać, "
-                    "napisz po prostu, że tę informację pomijamy albo że wolisz następną kategorię.\n\n"
-                    f"Na początek zatrzymajmy się przy kategorii: {category_label}. "
-                    f"Napisz w kilku zdaniach, co uważasz za ważne w tym temacie. "
-                    f"Jeśli chcesz, możesz przy okazji wspomnieć o rzeczach typu: {fields_list}."
-                )
-            else:
-                # Kolejne pytania – jedna grupa pól na raz, w luźniejszej formie.
-                assistant_reply = (
-                    f"Teraz kategoria: {category_label}. "
-                    "Napisz po prostu, co uważasz za ważne w tym obszarze. "
-                    f"Jeśli chcesz, możesz też doprecyzować rzeczy typu: {fields_list}. "
-                    "Możesz pominąć dowolne elementy albo poprosić o następną kategorię."
-                )
+        if next_field == "reporter_type":
+            assistant_reply = (
+                "Dzień dobry. Jestem wirtualnym asystentem ZUS.\n\n"
+                "Zanim zaczniemy: Czy zgłaszasz wypadek osobiście (jako poszkodowany), "
+                "czy występujesz jako pełnomocnik?"
+            )
+        elif next_field == "accident_description":
+            assistant_reply = (
+                "Przejdźmy do najważniejszej części - przebiegu wypadku. "
+                "Aby ZUS mógł prawidłowo ocenić zdarzenie, musimy ustalić tzw. drzewo przyczyn.\n\n"
+                "Opisz proszę sytuację, odpowiadając kolejno na trzy pytania:\n"
+                "1. Co robiłeś/aś bezpośrednio przed zdarzeniem? (Jaka to była czynność? np. 'wchodziłem po drabinie', 'niosłem paczkę')\n"
+                "2. Co dokładnie się stało? (Jaki fakt spowodował uraz? np. 'noga ześlizgnęła się ze stopnia', 'potknąłem się o przewód')\n"
+                "3. Jaki jest skutek? (Jaki to uraz i jakiej części ciała?)\n\n"
+                "Możesz to opisać własnymi słowami w jednej wiadomości."
+            )
         else:
-            # Gdyby pole nie należało do żadnej kategorii (nie powinno się zdarzyć).
-            label = human_field_label(next_field)
-            assistant_reply = f"{label}:"
+
+            category = find_category_for_field(next_field)
+            if category is not None:
+                _, category_label, category_fields = category
+                # W tej kategorii pytamy tylko o pola, które nadal są puste
+                # (i nie zostały oznaczone jako pominięte).
+                missing_in_category = []
+                for name in category_fields:
+                    if name in skipped:
+                        continue
+                    value = getattr(case_state, name, None)
+                    if value is None or (isinstance(value, str) and not value.strip()):
+                        missing_in_category.append(name)
+
+                labels = [human_field_label(name) for name in missing_in_category]
+                fields_list = ", ".join(labels)
+
+                # Pierwsza interakcja — przedstaw zasady raz na początku.
+                if not history:
+                    assistant_reply = (
+                        "Dzień dobry! Opisz proszę, co się wydarzyło.\n\n"
+                        "Potem przejdziemy po kilku grupach pytań potrzebnych do formularza. "
+                        "Możesz mówić swobodnie, tak jak Ci wygodnie – jeśli czegoś nie chcesz podawać, "
+                        "napisz po prostu, że tę informację pomijamy albo że wolisz następną kategorię.\n\n"
+                        f"Na początek zatrzymajmy się przy kategorii: {category_label}. "
+                        f"Napisz w kilku zdaniach, co uważasz za ważne w tym temacie. "
+                        f"Jeśli chcesz, możesz przy okazji wspomnieć o rzeczach typu: {fields_list}."
+                    )
+                else:
+                    # Kolejne pytania – jedna grupa pól na raz, w luźniejszej formie.
+                    assistant_reply = (
+                        f"Teraz kategoria: {category_label}. "
+                        "Napisz po prostu, co uważasz za ważne w tym obszarze. "
+                        f"Jeśli chcesz, możesz też doprecyzować rzeczy typu: {fields_list}. "
+                        "Możesz pominąć dowolne elementy albo poprosić o następną kategorię."
+                    )
+            else:
+                # Gdyby pole nie należało do żadnej kategorii (nie powinno się zdarzyć).
+                label = human_field_label(next_field)
+                assistant_reply = f"{label}:"
     else:
         # To jest moment, w którym generujemy raport końcowy i zalecenia
         
