@@ -7,14 +7,16 @@ import {
   Paper,
   Container,
   CircularProgress,
+  Tooltip,
 } from "@mui/material";
 import SendIcon from "@mui/icons-material/Send";
+import RestartAltIcon from "@mui/icons-material/RestartAlt"; // Ikona resetu
 import TextMessage from "./TextMessage";
 import { useChat } from "../context/ChatContext"; // 1. Importujemy hook contextu
 
 function ConversationalForm() {
   // 2. Pobieramy stan i funkcje z Contextu zamiast lokalnych useState
-  const { messages, sendMessage, isLoading } = useChat();
+  const { messages, sendMessage, isLoading, clearSession } = useChat();
 
   const [input, setInput] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -56,10 +58,28 @@ function ConversationalForm() {
         }}
       >
         {/* --- Pasek Nagłówka --- */}
-        <Box sx={{ bgcolor: "primary.main", color: "white", p: 2 }}>
+        <Box
+          sx={{
+            bgcolor: "primary.main",
+            color: "white",
+            p: 2,
+            display: "flex",
+            justifyContent: "space-between", // Rozstrzel elementy
+            alignItems: "center",
+          }}
+        >
+          {/* Pusty Box, żeby tytuł był na środku (trik flexboxa) lub po prostu tytuł po lewej */}
+          <Box width={40} />
+
           <Typography variant="h6" align="center">
             Asystent Zgłoszenia
           </Typography>
+
+          <Tooltip title="Rozpocznij nowe zgłoszenie (czyści dane)">
+            <IconButton onClick={clearSession} sx={{ color: "white" }}>
+              <RestartAltIcon />
+            </IconButton>
+          </Tooltip>
         </Box>
 
         {/* --- Obszar Czatu --- */}
