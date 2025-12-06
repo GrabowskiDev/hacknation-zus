@@ -146,7 +146,7 @@ function OfficialView() {
         </div>
 
         {/* PRAWA KOLUMNA: Renderowanie Markdown (Większa - 8/12) */}
-        <div className="lg:col-span-8 text-black">
+        <div className="lg:col-span-8 text-black overflow-scroll">
           {!markdownResult && !isAnalyzing && (
             <div className="h-full flex flex-col items-center justify-center text-slate-400 border-2 border-dashed border-slate-200 rounded-2xl min-h-[400px]">
               <FileOutput size={48} className="mb-4 opacity-20" />
@@ -164,7 +164,7 @@ function OfficialView() {
           )}
 
           {markdownResult && (
-            <div className="bg-white rounded-2xl shadow-md border border-slate-200 min-h-[600px] flex flex-col animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="bg-white rounded-2xl shadow-md border border-slate-200 min-h-[600px] flex flex-col animate-in fade-in slide-in-from-bottom-4 h-128 duration-500">
               {/* Pasek narzędzi dokumentu */}
               <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 rounded-t-2xl">
                 <span className="text-sm font-semibold text-slate-600 uppercase tracking-wider">
