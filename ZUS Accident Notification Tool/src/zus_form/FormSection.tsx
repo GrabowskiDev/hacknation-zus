@@ -1,5 +1,4 @@
 import React from "react";
-import { Paper, Typography, Box } from "@mui/material";
 import type { FormSectionConfig } from "../types";
 import InputSection from "./InputSection";
 
@@ -17,11 +16,13 @@ function FormSection({
   onFieldBlur,
 }: FormSectionProps) {
   return (
-    <Paper elevation={3} sx={{ p: 3, mb: 3, borderRadius: 4 }}>
-      <Typography variant="h6" gutterBottom>
-        {config.title}
-      </Typography>
-      <Box>
+    <div className="mb-8 last:mb-0">
+      <div className="flex items-center gap-3 mb-4">
+        <div className="h-6 w-1 bg-[#007834] rounded-full"></div>
+        <h3 className="text-lg font-bold text-slate-800">{config.title}</h3>
+      </div>
+
+      <div className="bg-white p-1">
         {config.fields.map((field) => (
           <InputSection
             key={field.key}
@@ -31,8 +32,11 @@ function FormSection({
             onBlur={(newValue) => onFieldBlur(field.key, newValue, field.label)}
           />
         ))}
-      </Box>
-    </Paper>
+      </div>
+
+      {/* Visual separator */}
+      <hr className="border-t border-slate-100 mt-2" />
+    </div>
   );
 }
 

@@ -1,38 +1,21 @@
 import React, { useState, useRef, useEffect } from "react";
-import {
-  Box,
-  TextField,
-  IconButton,
-  Typography,
-  Paper,
-  Container,
-  CircularProgress,
-  Tooltip,
-} from "@mui/material";
-import SendIcon from "@mui/icons-material/Send";
-import RestartAltIcon from "@mui/icons-material/RestartAlt"; // Ikona resetu
+import { Send, RotateCcw, Loader2 } from "lucide-react"; // Icons
 import TextMessage from "./TextMessage";
-import { useChat } from "../context/ChatContext"; // 1. Importujemy hook contextu
+import { useChat } from "../context/ChatContext";
 
 function ConversationalForm() {
-  // 2. Pobieramy stan i funkcje z Contextu zamiast lokalnych useState
   const { messages, sendMessage, isLoading, clearSession } = useChat();
-
   const [input, setInput] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll do dołu przy każdej nowej wiadomości lub zmianie statusu ładowania
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isLoading]);
 
   const handleSend = async () => {
     if (!input.trim() || isLoading) return;
-
     const messageToSend = input;
-    setInput(""); // Czyścimy input natychmiast dla lepszego UX
-
-    // 3. Wysyłamy wiadomość do Contextu (który gada z API)
+    setInput("");
     await sendMessage(messageToSend);
   };
 
@@ -41,125 +24,74 @@ function ConversationalForm() {
   };
 
   return (
-    <Container
-      maxWidth="sm" // W kontekście layoutu gridowego można to zmienić na false/xl zależnie od potrzeb
-      disableGutters // Opcjonalnie, żeby lepiej pasowało w kolumnie
-      sx={{ py: 2, height: "100%", display: "flex", flexDirection: "column" }}
-    >
-      <Paper
-        elevation={4}
-        sx={{
-          flexGrow: 1,
-          display: "flex",
-          flexDirection: "column",
-          overflow: "hidden",
-          borderRadius: 4,
-          position: "relative",
-        }}
-      >
-        {/* --- Pasek Nagłówka --- */}
-        <Box
-          sx={{
-            bgcolor: "primary.main",
-            color: "white",
-            p: 2,
-            display: "flex",
-            justifyContent: "space-between", // Rozstrzel elementy
-            alignItems: "center",
-          }}
+    <div className="flex flex-col h-full bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden relative">
+      {/* --- Header --- */}
+      <div className="h-16 bg-[#007834] flex justify-between items-center px-6 shadow-md z-10">
+        <div className="w-10"></div> {/* Spacer for alignment */}
+        <h1 className="text-white font-semibold text-lg tracking-wide">
+          Asystent Zgłoszenia
+        </h1>
+        <button
+          onClick={clearSession}
+          title="Rozpocznij nowe zgłoszenie"
+          className="text-white/80 hover:text-white hover:bg-white/10 p-2 rounded-full transition-all duration-200"
         >
-          {/* Pusty Box, żeby tytuł był na środku (trik flexboxa) lub po prostu tytuł po lewej */}
-          <Box width={40} />
+          <RotateCcw size={20} />
+        </button>
+      </div>
 
-          <Typography variant="h6" align="center">
-            Asystent Zgłoszenia
-          </Typography>
+      {/* --- Chat Area --- */}
+      <div className="flex-1 overflow-y-auto p-4 sm:p-6 bg-slate-50 custom-scrollbar flex flex-col gap-4">
+        {messages.map((msg, index) => (
+          <TextMessage
+            key={index}
+            text={msg.content}
+            isUser={msg.role === "user"}
+          />
+        ))}
 
-          <Tooltip title="Rozpocznij nowe zgłoszenie (czyści dane)">
-            <IconButton onClick={clearSession} sx={{ color: "white" }}>
-              <RestartAltIcon />
-            </IconButton>
-          </Tooltip>
-        </Box>
+        {/* Loading Indicator */}
+        {isLoading && (
+          <div className="flex items-center gap-2 ml-2 mt-2 text-[#007834]">
+            <Loader2 className="animate-spin" size={18} />
+            <span className="text-xs font-medium text-slate-500 italic">
+              Analizuję odpowiedź...
+            </span>
+          </div>
+        )}
 
-        {/* --- Obszar Czatu --- */}
-        <Box
-          sx={{
-            flexGrow: 1,
-            overflowY: "auto",
-            p: 3,
-            bgcolor: "#f8f9fa",
-            display: "flex",
-            flexDirection: "column",
-            gap: 2,
-          }}
-        >
-          {/* 4. Mapujemy wiadomości z Contextu */}
-          {messages.map((msg, index) => {
-            const isUser = msg.role === "user";
-            return (
-              <TextMessage
-                key={index} // W produkcji najlepiej używać unikalnego ID z backendu
-                text={msg.content}
-                isUser={isUser}
-              />
-            );
-          })}
+        <div ref={messagesEndRef} />
+      </div>
 
-          {/* Animacja ładowania (zamiast "Pisanie...") */}
-          {isLoading && (
-            <Box
-              sx={{
-                display: "flex",
-                alignItems: "center",
-                gap: 1,
-                ml: 1,
-                mt: 1,
-              }}
-            >
-              <CircularProgress size={20} color="secondary" />
-              <Typography
-                variant="caption"
-                sx={{ color: "grey.500", fontStyle: "italic" }}
-              >
-                Analizuję odpowiedź...
-              </Typography>
-            </Box>
-          )}
+      {/* --- Input Area --- */}
+      <div className="p-4 bg-white border-t border-slate-100">
+        <div className="relative flex items-center gap-2 bg-slate-100 rounded-2xl p-2 pr-2 focus-within:ring-2 focus-within:ring-[#007834]/20 focus-within:bg-white transition-all duration-300">
+          <input
+            type="text"
+            className="flex-1 bg-transparent border-none outline-none text-slate-700 placeholder:text-slate-400 px-3 py-2 text-sm sm:text-base"
+            placeholder="Opisz sytuację..."
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyPress}
+            disabled={isLoading}
+            autoComplete="off"
+          />
 
-          <div ref={messagesEndRef} />
-        </Box>
-
-        {/* --- Obszar Inputu --- */}
-        <Box sx={{ p: 2, bgcolor: "white", borderTop: "1px solid #eee" }}>
-          <Box sx={{ display: "flex", gap: 1 }}>
-            <TextField
-              fullWidth
-              placeholder="Opisz sytuację..."
-              variant="outlined"
-              size="small"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyPress}
-              disabled={isLoading} // Blokada inputu podczas komunikacji z API
-              autoComplete="off"
-              sx={{ "& .MuiOutlinedInput-root": { borderRadius: 4 } }}
-            />
-            <IconButton
-              color="primary"
-              onClick={handleSend}
-              disabled={!input.trim() || isLoading}
-              sx={{
-                bgcolor: "primary.50",
-                "&:hover": { bgcolor: "primary.100" },
-              }}
-            >
-              <SendIcon />
-            </IconButton>
-          </Box>
-        </Box>
-      </Paper>
-    </Container>
+          <button
+            onClick={handleSend}
+            disabled={!input.trim() || isLoading}
+            className={`p-3 rounded-xl transition-all duration-200 flex items-center justify-center
+              ${
+                !input.trim() || isLoading
+                  ? "bg-slate-200 text-slate-400 cursor-not-allowed"
+                  : "bg-[#007834] text-white shadow-lg hover:bg-[#005f2a] hover:shadow-green-900/20 hover:scale-105 active:scale-95"
+              }`}
+          >
+            <Send size={18} />
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

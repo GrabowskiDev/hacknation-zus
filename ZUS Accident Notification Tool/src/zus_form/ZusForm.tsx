@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { Box } from "@mui/material";
 import FormSection from "./FormSection";
 import { useChat } from "../context/ChatContext";
 import { formConfig } from "./formConfig";
@@ -41,7 +40,7 @@ function ZusForm() {
   };
 
   return (
-    <Box sx={{ height: "100%", overflowY: "auto", p: 2 }}>
+    <div className="h-full overflow-y-auto px-6 pb-20 custom-scrollbar">
       {formConfig.map((section, index) => (
         <FormSection
           key={index}
@@ -51,7 +50,7 @@ function ZusForm() {
           onFieldBlur={handleFieldBlur}
         />
       ))}
-    </Box>
+    </div>
   );
 }
 
