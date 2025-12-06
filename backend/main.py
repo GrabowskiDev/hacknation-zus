@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.output_parsers import PydanticOutputParser
+from langchain_core.output_parsers import PydanticOutputParser, StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
 
@@ -232,6 +232,45 @@ def message_looks_like_skip(text: str) -> bool:
     return any(p in t for p in phrases)
 
 
+def detect_skip_with_llm(question_label: str, answer: str) -> bool:
+    """
+    Używa LLM do wykrycia, czy użytkownik odmawia podania danej informacji.
+    Jeśli LLM nie jest dostępny, spada do prostej heurystyki.
+    """
+    llm = get_llm()
+    if llm is None or ChatPromptTemplate is None:
+        return message_looks_like_skip(answer)
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                (
+                    "Jesteś klasyfikatorem odpowiedzi użytkownika.\n"
+                    "Masz ustalić, czy użytkownik WYRAŹNIE odmawia podania informacji, "
+                    "o którą pyta asystent (np. PESEL, adres, data wypadku).\n"
+                    "Jeśli użytkownik odmawia lub mówi, że nie chce podawać tej informacji, "
+                    "odpowiedz dokładnie: YES\n"
+                    "Jeśli użytkownik próbuje odpowiedzieć (nawet nieprecyzyjnie), odpowiedz dokładnie: NO\n"
+                    "Nie tłumacz się, nie dodawaj komentarzy, tylko jedno słowo: YES albo NO."
+                ),
+            ),
+            (
+                "human",
+                (
+                    "Pytanie asystenta (o jaką daną chodzi): {label}\n"
+                    "Odpowiedź użytkownika: {answer}"
+                ),
+            ),
+        ]
+    )
+
+    chain = prompt | llm | StrOutputParser()
+
+    result = chain.invoke({"label": question_label, "answer": answer}).strip().upper()
+    return result.startswith("YES")
+
+
 def infer_skipped_fields_from_history(history: List[ChatTurn]) -> List[str]:
     """
     Przechodzi po historii:
@@ -252,7 +291,7 @@ def infer_skipped_fields_from_history(history: List[ChatTurn]) -> List[str]:
         field_name = field_name_from_label(label)
         if not field_name:
             continue
-        if message_looks_like_skip(next_turn.content):
+        if detect_skip_with_llm(label, next_turn.content):
             skipped.add(field_name)
     return list(skipped)
 
@@ -386,7 +425,7 @@ def run_assistant_pipeline(
         last_assistant = next(
             (t for t in reversed(history) if t.role == "assistant"), None
         )
-        if last_assistant and message_looks_like_skip(message):
+        if last_assistant:
             text = last_assistant.content
             if ":" in text:
                 label = (
@@ -395,7 +434,7 @@ def run_assistant_pipeline(
                     .strip()
                 )
                 field_name = field_name_from_label(label)
-                if field_name:
+                if field_name and detect_skip_with_llm(label, message):
                     skipped_current.add(field_name)
 
     skipped_all = list(skipped_from_history | skipped_current)
