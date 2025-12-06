@@ -229,19 +229,25 @@ def extract_case_state_with_llm(
 
     chain = prompt | llm | parser
 
-    updated_state: CaseState = chain.invoke(
-        {
-            "current_state": previous_state.model_dump(),
-            "mode": mode.value,
-            "message": message,
-            "today": today,
-            "history": history_text,
-        }
-    )
-
-    return updated_state
-
-
+    try:
+        updated_state: CaseState = chain.invoke(
+            {
+                "current_state": previous_state.model_dump(),
+                "mode": mode.value,
+                "message": message,
+                "today": today,
+                "history": history_text,
+            }
+        )
+        return updated_state
+    except Exception as e:
+        # Fallback: tylko podmień opis wypadku na podstawie wiadomości
+        return previous_state.model_copy(
+            update={
+                "accident_description": message.strip()
+                or previous_state.accident_description
+            }
+        )
 def run_assistant_pipeline(
     case_id: str,
     message: str,
