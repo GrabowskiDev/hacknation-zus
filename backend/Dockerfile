@@ -7,15 +7,16 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
+    tesseract-ocr-pol \
     libtesseract-dev \
     poppler-utils \
- && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml README.md uv.lock ./
 COPY . .
 
 RUN pip install --upgrade pip \
- && pip install --no-cache-dir .
+    && pip install --no-cache-dir .
 
 EXPOSE 8000
 
