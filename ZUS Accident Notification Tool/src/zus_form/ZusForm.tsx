@@ -41,7 +41,7 @@ function ZusForm() {
   };
 
   return (
-    <Box sx={{ height: "100%", overflowY: "auto", p: 2, minWidth: 500 }}>
+    <Box sx={{ height: "100%", overflowY: "auto", p: 2 }}>
       {formConfig.map((section, index) => (
         <FormSection
           key={index}

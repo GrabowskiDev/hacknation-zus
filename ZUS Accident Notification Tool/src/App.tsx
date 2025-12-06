@@ -11,16 +11,14 @@ import { ChatProvider } from "./context/ChatContext";
 
 function App() {
   return (
-    <main className="flex justify-center items-center h-screen gap-8">
-      <StyledEngineProvider injectFirst>
-        <ThemeProvider theme={theme}>
-          <CssBaseline />
-          <ChatProvider>
-            <ConversationalForm />
-            <ZusForm />
-          </ChatProvider>
-        </ThemeProvider>
-      </StyledEngineProvider>
+    <main className="px-8 gap-2 flex justify-center items-center h-screen lg:gap-8 lg:flex-row flex-col">
+      <ThemeProvider theme={theme}>
+        <CssBaseline />
+        <ChatProvider>
+          <ConversationalForm />
+          <ZusForm />
+        </ChatProvider>
+      </ThemeProvider>
     </main>
   );
 }
