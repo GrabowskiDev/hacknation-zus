@@ -12,7 +12,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.output_parsers import PydanticOutputParser, StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
-from .ocr import extract_text_from_image
+from ocr import extract_text_from_image
 
 
 load_dotenv()  # load GOOGLE_API_KEY and friends from .env
