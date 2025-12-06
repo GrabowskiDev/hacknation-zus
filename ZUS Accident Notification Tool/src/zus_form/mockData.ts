@@ -11,7 +11,7 @@ export const mockFormData: FormInterface = {
           inputType: "text",
           currentValue: "Jan Kowalski",
           formatPlaceholder: "np. Jan Kowalski",
-          validationRule: (value: any) => value.length > 0,
+          regex: /^.+$/,
         },
         {
           name: "pesel",
@@ -19,7 +19,7 @@ export const mockFormData: FormInterface = {
           inputType: "text",
           currentValue: "85010112345",
           formatPlaceholder: "11 cyfr",
-          validationRule: (value: any) => /^\d{11}$/.test(value),
+          regex: /^\d{11}$/,
         },
         {
           name: "address",
@@ -27,7 +27,7 @@ export const mockFormData: FormInterface = {
           inputType: "text",
           currentValue: "ul. Przykładowa 1, 00-001 Warszawa",
           formatPlaceholder: "Ulica, numer domu, kod pocztowy, miasto",
-          validationRule: (value: any) => value.length > 5,
+          regex: /^.{6,}$/,
         },
       ],
     },
@@ -40,7 +40,7 @@ export const mockFormData: FormInterface = {
           inputType: "date",
           currentValue: "2023-10-25",
           formatPlaceholder: "RRRR-MM-DD",
-          validationRule: (value: any) => true,
+          regex: /.*/,
         },
         {
           name: "accidentTime",
@@ -48,7 +48,7 @@ export const mockFormData: FormInterface = {
           inputType: "time",
           currentValue: "14:30",
           formatPlaceholder: "GG:MM",
-          validationRule: (value: any) => true,
+          regex: /.*/,
         },
         {
           name: "location",
@@ -56,7 +56,7 @@ export const mockFormData: FormInterface = {
           inputType: "text",
           currentValue: "Biuro, sala konferencyjna nr 3",
           formatPlaceholder: "np. Hala produkcyjna, Biuro",
-          validationRule: (value: any) => value.length > 0,
+          regex: /^.+$/,
         },
       ],
     },
@@ -70,7 +70,7 @@ export const mockFormData: FormInterface = {
           currentValue:
             "Podczas wstawania z krzesła potknąłem się o kabel zasilający laptopa i upadłem na lewe kolano.",
           formatPlaceholder: "Szczegółowy opis przebiegu zdarzenia",
-          validationRule: (value: any) => value.length > 20,
+          regex: /^.{21,}$/,
         },
         {
           name: "witnesses",
@@ -78,7 +78,7 @@ export const mockFormData: FormInterface = {
           inputType: "text",
           currentValue: "Anna Nowak",
           formatPlaceholder: "Imiona i nazwiska świadków",
-          validationRule: (value: any) => true,
+          regex: /.*/,
         },
       ],
     },

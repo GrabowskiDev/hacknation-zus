@@ -12,6 +12,36 @@ interface ZusFormProps {
 }
 
 function ZusForm({ formContent, onFieldChange }: ZusFormProps) {
+  const handleFieldValidBlur = async (
+    sectionIndex: number,
+    fieldIndex: number,
+    newValue: string
+  ) => {
+    if (!formContent) return;
+    const field = formContent.sections[sectionIndex].fields[fieldIndex];
+
+    try {
+      const response = await fetch("/api/assistant/message", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          case_id: "default_case",
+          message: `Zaktualizowano pole "${field.label || field.name}" na wartość: "${newValue}"`,
+          mode: "notification",
+          conversation_history: [],
+        }),
+      });
+
+      if (!response.ok) {
+        console.error("Failed to send update to backend");
+      }
+    } catch (error) {
+      console.error("Error sending update:", error);
+    }
+  };
+
   if (!formContent || !formContent.sections) {
     return (
       <Box sx={{ p: 3, textAlign: "center" }}>
@@ -30,6 +60,7 @@ function ZusForm({ formContent, onFieldChange }: ZusFormProps) {
           section={section}
           sectionIndex={index}
           onFieldChange={onFieldChange}
+          onFieldValidBlur={handleFieldValidBlur}
         />
       ))}
     </Box>

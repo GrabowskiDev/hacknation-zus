@@ -11,12 +11,18 @@ interface FormSectionProps {
     fieldIndex: number,
     newValue: string
   ) => void;
+  onFieldValidBlur: (
+    sectionIndex: number,
+    fieldIndex: number,
+    newValue: string
+  ) => void;
 }
 
 function FormSection({
   section,
   sectionIndex,
   onFieldChange,
+  onFieldValidBlur,
 }: FormSectionProps) {
   return (
     <Paper elevation={3} sx={{ p: 3, mb: 3 }}>
@@ -30,6 +36,9 @@ function FormSection({
             field={field}
             onChange={(newValue) =>
               onFieldChange(sectionIndex, index, newValue)
+            }
+            onValidBlur={(newValue) =>
+              onFieldValidBlur(sectionIndex, index, newValue)
             }
           />
         ))}
