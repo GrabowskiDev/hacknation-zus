@@ -1,7 +1,14 @@
-import React, { createContext, useContext, useState } from "react";
+import React, { createContext, useContext, useState, useEffect } from "react";
 import type { ReactNode } from "react";
 import type { CaseState, ChatTurn, AssistantResponse } from "../types";
 import { v4 as uuidv4 } from "uuid";
+
+// Klucze do localStorage
+const STORAGE_KEYS = {
+  MESSAGES: "zant_chat_history",
+  CASE_STATE: "zant_case_state",
+  CASE_ID: "zant_case_id",
+};
 
 interface ChatContextType {
   messages: ChatTurn[];
@@ -9,45 +16,83 @@ interface ChatContextType {
   setCaseState: React.Dispatch<React.SetStateAction<CaseState>>;
   isLoading: boolean;
   sendMessage: (text: string) => Promise<void>;
-  missingFields: string[]; // Lista nazw brakujących pól
+  missingFields: string[];
+  clearSession: () => void; // Opcjonalnie: funkcja do resetu
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
 
+// Domyślna wiadomość powitalna
+const INITIAL_MESSAGE: ChatTurn = {
+  role: "assistant",
+  content:
+    "Cześć! Jestem asystentem zgłoszenia wypadku ZUS. Jak mogę Ci pomóc? Możesz odpowiedzieć pełnym zeznaniem zdarzenia. Jeśli będą jakieś brakujące informacje, poproszę Cię o nie.",
+};
+
 export const ChatProvider = ({ children }: { children: ReactNode }) => {
-  // Stan konwersacji
-  const [messages, setMessages] = useState<ChatTurn[]>([
-    {
-      role: "assistant",
-      content:
-        "Cześć! Jestem asystentem zgłoszenia wypadku ZUS. Jak mogę Ci pomóc? Możesz odpowiedzieć pełnym zeznaniem zdarzenia. Jeśli będą jakieś brakujące informacje, poproszę Cię o nie. Możesz odmówić podania niektórych danych, ale pamiętaj, że może to wpłynąć na proces zgłoszenia.",
-    },
-  ]);
+  // 1. Inicjalizacja ID Sprawy (Lazy Init)
+  const [caseId] = useState<string>(() => {
+    const savedId = localStorage.getItem(STORAGE_KEYS.CASE_ID);
+    if (savedId) return savedId;
 
-  // Stan formularza (Twoje CaseState)
-  const [caseState, setCaseState] = useState<CaseState>({ witnesses: [] });
+    const newId = uuidv4();
+    localStorage.setItem(STORAGE_KEYS.CASE_ID, newId);
+    return newId;
+  });
 
-  // Stan ładowania i brakujących pól
+  // 2. Inicjalizacja Wiadomości (Lazy Init)
+  const [messages, setMessages] = useState<ChatTurn[]>(() => {
+    try {
+      const savedMessages = localStorage.getItem(STORAGE_KEYS.MESSAGES);
+      return savedMessages ? JSON.parse(savedMessages) : [INITIAL_MESSAGE];
+    } catch (e) {
+      console.error("Błąd parsowania historii czatu:", e);
+      return [INITIAL_MESSAGE];
+    }
+  });
+
+  // 3. Inicjalizacja Stanu Sprawy (Lazy Init)
+  const [caseState, setCaseState] = useState<CaseState>(() => {
+    try {
+      const savedState = localStorage.getItem(STORAGE_KEYS.CASE_STATE);
+      return savedState ? JSON.parse(savedState) : { witnesses: [] };
+    } catch (e) {
+      console.error("Błąd parsowania stanu sprawy:", e);
+      return { witnesses: [] };
+    }
+  });
+
   const [isLoading, setIsLoading] = useState(false);
   const [missingFields, setMissingFields] = useState<string[]>([]);
 
+  // --- EFEKTY DO ZAPISYWANIA (PERSISTENCE) ---
+
+  // Zapisz wiadomości przy każdej zmianie
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.MESSAGES, JSON.stringify(messages));
+  }, [messages]);
+
+  // Zapisz stan sprawy przy każdej zmianie
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.CASE_STATE, JSON.stringify(caseState));
+  }, [caseState]);
+
+  // --- LOGIKA BIZNESOWA ---
+
   const sendMessage = async (text: string) => {
-    // 1. Dodaj wiadomość usera optymistycznie
     const userMessage: ChatTurn = { role: "user", content: text };
     setMessages((prev) => [...prev, userMessage]);
     setIsLoading(true);
 
     try {
-      // 2. Przygotuj payload zgodnie z Twoim modelem AssistantMessageRequest
       const payload = {
-        case_id: uuidv4(),
+        case_id: caseId, // Używamy stałego ID z pamięci!
         message: text,
         mode: "notification",
-        conversation_history: messages,
+        conversation_history: messages, // Wysyłamy historię sprzed dodania userMessage (lub dodaj userMessage tutaj jeśli backend tego wymaga)
         case_state: caseState,
       };
 
-      // 3. Strzał do Twojego API FastAPI
       const response = await fetch(
         "http://localhost:8000/api/assistant/message",
         {
@@ -61,7 +106,6 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
 
       const data: AssistantResponse = await response.json();
 
-      // 4. Aktualizacja stanu na podstawie odpowiedzi AI
       setMessages((prev) => [
         ...prev,
         { role: "assistant", content: data.assistant_reply },
@@ -82,6 +126,14 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
+  // Funkcja pomocnicza do czyszczenia sesji (np. przycisk "Nowe Zgłoszenie")
+  const clearSession = () => {
+    localStorage.removeItem(STORAGE_KEYS.MESSAGES);
+    localStorage.removeItem(STORAGE_KEYS.CASE_STATE);
+    localStorage.removeItem(STORAGE_KEYS.CASE_ID);
+    window.location.reload(); // Najprostszy sposób na reset stanu
+  };
+
   return (
     <ChatContext.Provider
       value={{
@@ -91,6 +143,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
         isLoading,
         sendMessage,
         missingFields,
+        clearSession,
       }}
     >
       {children}
