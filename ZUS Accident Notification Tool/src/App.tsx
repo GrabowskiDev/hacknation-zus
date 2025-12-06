@@ -1,6 +1,6 @@
 import "./App.css";
 import ConversationalForm from "./chat/ConversationalForm";
-import ZusForm from "./zus_form/ZusForm";
+import FormView from "./components/form/FormView";
 import { ChatProvider } from "./context/ChatContext";
 
 function App() {
@@ -23,7 +23,7 @@ function App() {
               </h2>
             </div>
             <div className="pt-16 h-full">
-              <ZusForm />
+              <FormView />
             </div>
           </section>
 

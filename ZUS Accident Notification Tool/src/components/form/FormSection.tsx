@@ -1,6 +1,5 @@
-import React from "react";
-import type { FormSectionConfig } from "../types";
-import InputSection from "./InputSection";
+import type { FormSectionConfig } from "@/types";
+import InputField from "./InputField";
 
 interface FormSectionProps {
   config: FormSectionConfig;
@@ -24,7 +23,7 @@ function FormSection({
 
       <div className="bg-white p-1">
         {config.fields.map((field) => (
-          <InputSection
+          <InputField
             key={field.key}
             config={field}
             value={values[field.key] || ""}
@@ -34,7 +33,6 @@ function FormSection({
         ))}
       </div>
 
-      {/* Visual separator */}
       <hr className="border-t border-slate-100 mt-2" />
     </div>
   );
