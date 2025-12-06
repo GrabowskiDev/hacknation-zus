@@ -19,7 +19,8 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
   const [messages, setMessages] = useState<ChatTurn[]>([
     {
       role: "assistant",
-      content: "Dzień dobry! Opisz proszę, co się wydarzyło?",
+      content:
+        "Cześć! Jestem asystentem zgłoszenia wypadku ZUS. Jak mogę Ci pomóc? Możesz odpowiedzieć pełnym zeznaniem zdarzenia. Jeśli będą jakieś brakujące informacje, poproszę Cię o nie. Możesz odmówić podania niektórych danych, ale pamiętaj, że może to wpłynąć na proces zgłoszenia.",
     },
   ]);
 
@@ -83,7 +84,14 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
 
   return (
     <ChatContext.Provider
-      value={{ messages, caseState, setCaseState, isLoading, sendMessage, missingFields }}
+      value={{
+        messages,
+        caseState,
+        setCaseState,
+        isLoading,
+        sendMessage,
+        missingFields,
+      }}
     >
       {children}
     </ChatContext.Provider>
