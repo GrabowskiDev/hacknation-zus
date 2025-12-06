@@ -20,7 +20,7 @@ from docx import Document as DocxDocument
 from docx.shared import Pt
 from fpdf import FPDF
 
-from ocr import extract_text_from_image
+from ocr import extract_text_from_image, summarize_accident_facts_from_pdfs
 
 
 load_dotenv()  # load GOOGLE_API_KEY and friends from .env
@@ -1168,3 +1168,35 @@ async def download_documents(case_state: CaseState):
         media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
+
+@app.post("/api/ocr/summarize-accident-facts")
+async def summarize_accident_facts(files: List[UploadFile] = File(...)) -> dict:
+    """
+    Przyjmuje wiele plików PDF z kartami wypadku, wykonuje OCR,
+    a następnie zwraca zsyntetyzowane podsumowanie faktów istotnych
+    dla oceny wypadku.
+    """
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+
+    contents_list: list[bytes] = []
+    for f in files:
+        data = await f.read()
+        if not data:
+            continue
+        contents_list.append(data)
+
+    if not contents_list:
+        raise HTTPException(status_code=400, detail="All uploaded files are empty")
+
+    try:
+        summary = summarize_accident_facts_from_pdfs(contents_list)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # pragma: no cover - defensive
+        raise HTTPException(status_code=500, detail="Summarization failed") from exc
+
+    return {
+        "summary": summary,
+        "file_count": len(contents_list),
+    }
