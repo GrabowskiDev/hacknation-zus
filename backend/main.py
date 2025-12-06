@@ -5,12 +5,14 @@ from enum import Enum
 from typing import Any, List, Optional
 from datetime import date
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.output_parsers import PydanticOutputParser, StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
+
+from .ocr import extract_text_from_image
 
 
 load_dotenv()  # load GOOGLE_API_KEY and friends from .env
@@ -93,6 +95,104 @@ class AssistantMessageResponse(BaseModel):
     assistant_reply: str
     missing_fields: List[MissingField]
     case_state_preview: CaseState
+
+
+class CaseDocument(BaseModel):
+    """
+    Pojedynczy dokument wejściowy do oceny sprawy (np. zawiadomienie, wyjaśnienia, karta informacyjna).
+    """
+
+    name: str = Field(..., description="Nazwa/tytuł dokumentu, np. 'zawiadomienie ZUS Z-3'")
+    type: Optional[str] = Field(
+        default=None,
+        description="Rodzaj dokumentu, np. 'zawiadomienie', 'wyjaśnienia', 'dokumentacja medyczna'",
+    )
+    text: str = Field(..., description="Pełna treść dokumentu po odczytaniu (np. z OCR)")
+
+
+class Discrepancy(BaseModel):
+    """
+    Rozbieżność pomiędzy dokumentami lub pomiędzy dokumentem a ustalonym stanem faktycznym.
+    """
+
+    description: str = Field(
+        ...,
+        description=(
+            "Opis rozbieżności (np. różne daty wypadku, różne miejsce wypadku, niespójne dane świadka)"
+        ),
+    )
+    fields_affected: List[str] = Field(
+        default_factory=list,
+        description="Nazwy pól, których dotyczy rozbieżność (np. 'accident_date', 'accident_place')",
+    )
+    documents_involved: List[str] = Field(
+        default_factory=list,
+        description="Nazwy dokumentów, w których występuje rozbieżność",
+    )
+
+
+class OpinionOutcome(str, Enum):
+    """
+    Wynik oceny zdarzenia.
+    """
+
+    ACCIDENT_CONFIRMED = "accident_confirmed"
+    ACCIDENT_NOT_CONFIRMED = "accident_not_confirmed"
+    INCONCLUSIVE = "inconclusive"
+
+
+class CaseEvaluationResult(BaseModel):
+    """
+    Wynik złożonej oceny sprawy na podstawie całego zestawu dokumentów.
+    """
+
+    normalized_case_state: CaseState = Field(
+        ...,
+        description=(
+            "Ujednolicony stan faktyczny sprawy wynikający z całości dokumentów (odpowiada polom CaseState)"
+        ),
+    )
+    discrepancies: List[Discrepancy] = Field(
+        default_factory=list,
+        description="Lista rozbieżności wykrytych w dokumentach",
+    )
+    missing_fields: List[MissingField] = Field(
+        default_factory=list,
+        description="Pola, które nadal wymagają uzupełnienia (np. brakujące informacje w dokumentacji)",
+    )
+    missing_documents: List[str] = Field(
+        default_factory=list,
+        description="Informacje o dokumentach, które należy jeszcze uzupełnić/dostarczyć",
+    )
+    opinion: OpinionOutcome = Field(
+        ...,
+        description=(
+            "Czy zdarzenie należy uznać za wypadek podczas prowadzenia pozarolniczej działalności gospodarczej"
+        ),
+    )
+    opinion_explanation: str = Field(
+        ...,
+        description="Szczegółowe, logiczne uzasadnienie przyjętego rozstrzygnięcia",
+    )
+    accident_card_draft: str = Field(
+        ...,
+        description=(
+            "Projekt karty wypadku w formie tekstowej (może być w formacie zbliżonym do formularza ZUS)"
+        ),
+    )
+
+
+class CaseEvaluationRequest(BaseModel):
+    case_id: str = Field(..., description="Identyfikator sprawy (dowolny identyfikator z frontendu)")
+    documents: List[CaseDocument] = Field(
+        default_factory=list,
+        description="Komplet dokumentów tekstowych (np. zawiadomienia, wyjaśnienia, dokumentacja medyczna)",
+    )
+
+
+class CaseEvaluationResponse(BaseModel):
+    case_id: str
+    evaluation: CaseEvaluationResult
 
 
 app = FastAPI(title="ZANT Backend", version="0.1.0")
@@ -663,6 +763,119 @@ def run_assistant_pipeline(
     )
 
 
+def evaluate_case_from_documents(
+    documents: List[CaseDocument], case_id: str
+) -> CaseEvaluationResult:
+    """
+    Uruchamia złożony pipeline LLM na komplecie dokumentów:
+    - ujednolica stan faktyczny (CaseState),
+    - wykrywa rozbieżności,
+    - wskazuje brakujące informacje i dokumenty,
+    - wydaje opinię, czy zdarzenie jest wypadkiem podczas prowadzenia pozarolniczej DG,
+    - generuje projekt karty wypadku.
+    """
+    llm = get_llm()
+    if llm is None or ChatPromptTemplate is None or PydanticOutputParser is None:
+        # Fallback: minimalna implementacja bez LLM – zwracamy puste rozstrzygnięcie.
+        base_state = CaseState()
+        missing = simple_missing_fields(base_state, Mode.NOTIFICATION)
+        return CaseEvaluationResult(
+            normalized_case_state=base_state,
+            discrepancies=[],
+            missing_fields=missing,
+            missing_documents=[],
+            opinion=OpinionOutcome.INCONCLUSIVE,
+            opinion_explanation=(
+                "Brak dostępnego modelu LLM – nie można przeprowadzić pełnej oceny na podstawie dokumentów."
+            ),
+            accident_card_draft=(
+                "Brak projektu karty wypadku – środowisko LLM nie jest dostępne."
+            ),
+        )
+
+    parser = PydanticOutputParser(pydantic_object=CaseEvaluationResult)
+
+    docs_as_text = [
+        {
+            "name": d.name,
+            "type": d.type or "",
+            "text": d.text,
+        }
+        for d in documents
+    ]
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                (
+                    "Jesteś ekspertem ZUS ds. wypadków przy prowadzeniu pozarolniczej "
+                    "działalności gospodarczej.\n"
+                    "Na podstawie kompletu dokumentów musisz:\n"
+                    "1) odczytać i zrozumieć treść dokumentów (zakładamy, że OCR już został wykonany),\n"
+                    "2) ujednolicić stan faktyczny sprawy w strukturze CaseState,\n"
+                    "3) wskazać rozbieżności pomiędzy dokumentami (np. różne daty, różne miejsca wypadku, "
+                    "różne dane świadków, różne opisy zdarzenia),\n"
+                    "4) wskazać brakujące informacje i/lub brakujące dokumenty, które są potrzebne do "
+                    "rzetelnej oceny zdarzenia,\n"
+                    "5) wydać jednoznaczną opinię, czy zdarzenie jest wypadkiem podczas prowadzenia "
+                    "pozarolniczej działalności gospodarczej,\n"
+                    "6) szczegółowo uzasadnić swoją opinię,\n"
+                    "7) przygotować projekt karty wypadku (w formie tekstowej, z polami zbliżonymi do "
+                    "formularza ZUS, z wypełnionymi danymi na podstawie ustalonego stanu faktycznego).\n\n"
+                    "Zawsze zwracaj wynik w formacie JSON ściśle zgodnym ze schematem CaseEvaluationResult."
+                ),
+            ),
+            (
+                "human",
+                (
+                    "Identyfikator sprawy: {case_id}\n\n"
+                    "Komplet dokumentów (po OCR) w formacie JSON:\n"
+                    "{documents_json}\n\n"
+                    "Twoje zadanie:\n"
+                    "- przeanalizuj wszystkie dokumenty razem (załóż, że mogą zawierać błędy i sprzeczne dane),\n"
+                    "- ujednolicz stan faktyczny w strukturze CaseState,\n"
+                    "- wskaż wyraźnie wszystkie istotne rozbieżności pomiędzy dokumentami,\n"
+                    "- wskaż, jakich informacji lub dokumentów brakuje,\n"
+                    "- wydaj opinię (opinion) oraz szczegółowe uzasadnienie (opinion_explanation),\n"
+                    "- przygotuj projekt karty wypadku (accident_card_draft) – może być jako dobrze "
+                    "sformatowany tekst z nagłówkami i polami.\n"
+                    "Odpowiedz TYLKO JSON-em zgodnym ze schematem CaseEvaluationResult."
+                ),
+            ),
+        ]
+    )
+
+    chain = prompt | llm | parser
+
+    try:
+        result: CaseEvaluationResult = chain.invoke(
+            {
+                "case_id": case_id,
+                "documents_json": docs_as_text,
+            }
+        )
+        return result
+    except Exception:
+        # Bezpieczny fallback: nie przerywamy działania API, tylko zwracamy odpowiedź INCONCLUSIVE.
+        base_state = CaseState()
+        missing = simple_missing_fields(base_state, Mode.NOTIFICATION)
+        return CaseEvaluationResult(
+            normalized_case_state=base_state,
+            discrepancies=[],
+            missing_fields=missing,
+            missing_documents=[],
+            opinion=OpinionOutcome.INCONCLUSIVE,
+            opinion_explanation=(
+                "Wystąpił błąd podczas przetwarzania dokumentów przez model LLM – "
+                "nie można przeprowadzić pełnej oceny."
+            ),
+            accident_card_draft=(
+                "Projekt karty wypadku nie został wygenerowany z powodu błędu LLM."
+            ),
+        )
+
+
 @app.post("/api/assistant/message", response_model=AssistantMessageResponse)
 async def assistant_message(
     payload: AssistantMessageRequest,
@@ -680,3 +893,42 @@ async def assistant_message(
         previous_state=payload.case_state,
         conversation_history=payload.conversation_history,
     )
+
+
+@app.post("/api/case/evaluate-documents", response_model=CaseEvaluationResponse)
+async def evaluate_documents(payload: CaseEvaluationRequest) -> CaseEvaluationResponse:
+    """
+    Endpoint dla II etapu oceny:
+    - przyjmuje komplet dokumentów w formie tekstowej (po OCR),
+    - uruchamia LLM do analizy,
+    - zwraca ujednolicony stan faktyczny, rozbieżności, braki, opinię i projekt karty wypadku.
+    """
+    evaluation = evaluate_case_from_documents(
+        documents=payload.documents, case_id=payload.case_id
+    )
+    return CaseEvaluationResponse(case_id=payload.case_id, evaluation=evaluation)
+
+
+@app.post("/api/ocr/read-document")
+async def read_document_ocr(file: UploadFile = File(...)) -> dict:
+    """
+    OCR endpoint.
+
+    Accepts an uploaded image file (e.g. PNG/JPEG) and returns text extracted
+    from the document using Tesseract OCR.
+    """
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    try:
+        text = extract_text_from_image(contents)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # pragma: no cover - defensive
+        raise HTTPException(status_code=500, detail="OCR failed") from exc
+
+    return {
+        "filename": file.filename,
+        "text": text,
+    }
