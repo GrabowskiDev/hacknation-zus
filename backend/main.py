@@ -241,6 +241,15 @@ def find_category_for_field(field_name: str) -> Optional[tuple[str, str, list[st
     return None
 
 
+def find_category_by_label(label: str) -> Optional[tuple[str, str, list[str]]]:
+    label_norm = label.strip().lower()
+    for cat in CATEGORY_DEFS:
+        _, category_label, _ = cat
+        if category_label.lower() == label_norm:
+            return cat
+    return None
+
+
 def field_name_from_label(label: str) -> Optional[str]:
     for key, value in FIELD_LABELS.items():
         if value == label:
@@ -274,6 +283,44 @@ def message_looks_like_skip(text: str) -> bool:
         "pomijamy",
     ]
     return any(p in t for p in phrases)
+
+
+def message_asks_next_category(text: str) -> bool:
+    """
+    Czy użytkownik prosi, żeby przejść do kolejnej kategorii pytań.
+    """
+    t = text.strip().lower()
+    if not t:
+        return False
+    phrases = [
+        "następna kategoria",
+        "nastepna kategoria",
+        "kolejna kategoria",
+        "idź dalej z kategorią",
+        "idz dalej z kategoria",
+    ]
+    return any(p in t for p in phrases)
+
+
+def extract_category_label_from_text(text: str) -> Optional[str]:
+    """
+    Próbujemy wyciągnąć nazwę kategorii z tekstu pytania asystenta.
+    Szukamy wzorców typu 'kategorii: X.' lub 'kategoria: X.'.
+    """
+    lowered = text.lower()
+    for marker in ["kategorii:", "kategoria:"]:
+        idx = lowered.find(marker)
+        if idx != -1:
+            start = idx + len(marker)
+            # Wytnij do końca zdania / linii
+            rest = text[start:].strip()
+            for sep in [".", "\n"]:
+                sep_idx = rest.find(sep)
+                if sep_idx != -1:
+                    rest = rest[:sep_idx]
+                    break
+            return rest.strip()
+    return None
 
 
 def detect_skip_with_llm(question_label: str, answer: str) -> bool:
@@ -320,9 +367,10 @@ def detect_skip_with_llm(question_label: str, answer: str) -> bool:
 def infer_skipped_fields_from_history(history: List[ChatTurn]) -> List[str]:
     """
     Przechodzi po historii:
-    - gdy asystent pyta o konkretne pole,
-    - a kolejna odpowiedź użytkownika wygląda jak odmowa,
-    - oznaczamy to pole jako "skipped".
+    - gdy asystent pyta o kategorię lub konkretne pole,
+    - a kolejna odpowiedź użytkownika wygląda jak odmowa / „to mnie nie dotyczy”
+      lub prośba o przejście dalej,
+    - oznaczamy odpowiednie pola jako "skipped".
     """
     skipped: set[str] = set()
     for i in range(len(history) - 1):
@@ -331,16 +379,31 @@ def infer_skipped_fields_from_history(history: List[ChatTurn]) -> List[str]:
         if turn.role != "assistant" or next_turn.role != "user":
             continue
         text = turn.content
-        if ":" not in text:
+        answer = next_turn.content
+
+        # Najpierw spróbujmy zinterpretować to jako pytanie o kategorię.
+        cat_label = extract_category_label_from_text(text)
+        if cat_label:
+            cat = find_category_by_label(cat_label)
+            if cat and (
+                message_asks_next_category(answer)
+                or detect_skip_with_llm(cat_label, answer)
+            ):
+                _, _, category_fields = cat
+                skipped.update(category_fields)
             continue
-        label = (
-            text.split(":")[-2 if text.count(":") > 1 else 0].splitlines()[-1].strip()
-        )
-        field_name = field_name_from_label(label)
-        if not field_name:
-            continue
-        if detect_skip_with_llm(label, next_turn.content):
-            skipped.add(field_name)
+
+        # Jeśli to nie wygląda jak pytanie o kategorię, spróbujmy potraktować je
+        # jak pytanie o konkretne pole (np. pole z etykietą).
+        if ":" in text:
+            label = (
+                text.split(":")[-2 if text.count(":") > 1 else 0]
+                .splitlines()[-1]
+                .strip()
+            )
+            field_name = field_name_from_label(label)
+            if field_name and detect_skip_with_llm(label, answer):
+                skipped.add(field_name)
     return list(skipped)
 
 
@@ -467,7 +530,8 @@ def run_assistant_pipeline(
 
     # Wyznacz pola, których użytkownik nie chce podawać – na podstawie historii + bieżącej odpowiedzi.
     skipped_from_history = set(infer_skipped_fields_from_history(history))
-    # Sprawdź, czy bieżąca wiadomość jest odmową odpowiedzi na ostatnie pytanie asystenta.
+    # Sprawdź, czy bieżąca wiadomość jest odmową odpowiedzi lub prośbą o przejście
+    # do kolejnej kategorii na podstawie ostatniego pytania asystenta.
     skipped_current: set[str] = set()
     if history:
         last_assistant = next(
@@ -475,15 +539,32 @@ def run_assistant_pipeline(
         )
         if last_assistant:
             text = last_assistant.content
-            if ":" in text:
-                label = (
-                    text.split(":")[-2 if text.count(":") > 1 else 0]
-                    .splitlines()[-1]
-                    .strip()
-                )
-                field_name = field_name_from_label(label)
-                if field_name and detect_skip_with_llm(label, message):
-                    skipped_current.add(field_name)
+
+            # Jeśli użytkownik prosi o przejście do następnej kategorii,
+            # pomijamy wszystkie jeszcze niewypełnione pola z bieżącej kategorii.
+            if message_asks_next_category(message):
+                cat_label = extract_category_label_from_text(text)
+                if cat_label:
+                    cat = find_category_by_label(cat_label)
+                    if cat:
+                        _, _, category_fields = cat
+                        for name in category_fields:
+                            value = getattr(case_state, name, None)
+                            if value is None or (
+                                isinstance(value, str) and not value.strip()
+                            ):
+                                skipped_current.add(name)
+            else:
+                # Standardowy przypadek: sprawdzamy odmowę dla konkretnego pola
+                if ":" in text:
+                    label = (
+                        text.split(":")[-2 if text.count(":") > 1 else 0]
+                        .splitlines()[-1]
+                        .strip()
+                    )
+                    field_name = field_name_from_label(label)
+                    if field_name and detect_skip_with_llm(label, message):
+                        skipped_current.add(field_name)
 
     skipped_all = list(skipped_from_history | skipped_current)
 
@@ -550,17 +631,20 @@ def run_assistant_pipeline(
             if not history:
                 assistant_reply = (
                     "Dzień dobry! Opisz proszę, co się wydarzyło.\n\n"
-                    "Następnie przejdziemy po kilku grupach pytań potrzebnych do formularza. "
-                    "W każdej grupie możesz odpowiedzieć na tyle, na ile chcesz – "
-                    "jeśli czegoś nie chcesz podawać, po prostu napisz, że tę informację pomijamy.\n\n"
-                    f"Zacznijmy od kategorii: {category_label}. "
-                    f"Podaj proszę: {fields_list}."
+                    "Potem przejdziemy po kilku grupach pytań potrzebnych do formularza. "
+                    "Możesz mówić swobodnie, tak jak Ci wygodnie – jeśli czegoś nie chcesz podawać, "
+                    "napisz po prostu, że tę informację pomijamy albo że wolisz następną kategorię.\n\n"
+                    f"Na początek zatrzymajmy się przy kategorii: {category_label}. "
+                    f"Napisz w kilku zdaniach, co uważasz za ważne w tym temacie. "
+                    f"Jeśli chcesz, możesz przy okazji wspomnieć o rzeczach typu: {fields_list}."
                 )
             else:
-                # Kolejne pytania – jedna grupa pól na raz.
+                # Kolejne pytania – jedna grupa pól na raz, w luźniejszej formie.
                 assistant_reply = (
                     f"Teraz kategoria: {category_label}. "
-                    f"Podaj proszę: {fields_list}."
+                    "Napisz po prostu, co uważasz za ważne w tym obszarze. "
+                    f"Jeśli chcesz, możesz też doprecyzować rzeczy typu: {fields_list}. "
+                    "Możesz pominąć dowolne elementy albo poprosić o następną kategorię."
                 )
         else:
             # Gdyby pole nie należało do żadnej kategorii (nie powinno się zdarzyć).
