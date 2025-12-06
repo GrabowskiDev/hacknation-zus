@@ -16,9 +16,11 @@ function ZusForm() {
 
     const newLocalState = flatConfig.reduce((acc, field) => {
       const val = caseState[field.key];
-      acc[field.key] = field.format 
-        ? field.format(val) 
-        : (val === undefined || val === null ? "" : String(val));
+      acc[field.key] = field.format
+        ? field.format(val)
+        : val === undefined || val === null
+        ? ""
+        : String(val);
       return acc;
     }, {} as Record<string, string>);
 
@@ -31,7 +33,7 @@ function ZusForm() {
 
   const handleFieldBlur = (key: string, newValue: string) => {
     const field = flatConfig.find((f) => f.key === key);
-    
+
     setCaseState((prev) => ({
       ...prev,
       [key]: field?.parse ? field.parse(newValue) : newValue,
