@@ -533,7 +533,17 @@ def run_assistant_pipeline(
         category = find_category_for_field(next_field)
         if category is not None:
             _, category_label, category_fields = category
-            labels = [human_field_label(name) for name in category_fields]
+            # W tej kategorii pytamy tylko o pola, które nadal są puste
+            # (i nie zostały oznaczone jako pominięte).
+            missing_in_category = []
+            for name in category_fields:
+                if name in skipped:
+                    continue
+                value = getattr(case_state, name, None)
+                if value is None or (isinstance(value, str) and not value.strip()):
+                    missing_in_category.append(name)
+
+            labels = [human_field_label(name) for name in missing_in_category]
             fields_list = ", ".join(labels)
 
             # Pierwsza interakcja — przedstaw zasady raz na początku.
