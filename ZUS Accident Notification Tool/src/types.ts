@@ -7,6 +7,13 @@ export interface ChatTurn {
   content: string;
 }
 
+export type ReporterType = "victim" | "proxy";
+
+export const ReporterType = {
+  VICTIM: "victim" as const,
+  PROXY: "proxy" as const,
+};
+
 export interface Witness {
   first_name: string;
   last_name: string;
@@ -14,6 +21,9 @@ export interface Witness {
 }
 
 export interface CaseState {
+  reporter_type?: ReporterType; // Kto zgłasza
+  proxy_document_attached?: boolean;
+
   // Dane poszkodowanego
   pesel?: string;
   first_name?: string;
@@ -63,12 +73,18 @@ export interface AssistantResponse {
   case_state_preview: CaseState;
 }
 
+export interface FormFieldOption {
+  value: string;
+  label: string;
+}
+
 export interface FormFieldConfig {
   key: keyof CaseState;
   label: string;
-  type: "text" | "textarea" | "date" | "time";
+  type: "text" | "textarea" | "date" | "time" | "select";
   placeholder?: string;
   regex?: RegExp;
+  options?: FormFieldOption[];
   format?: (value: any) => string;
   parse?: (value: string) => any;
 }
