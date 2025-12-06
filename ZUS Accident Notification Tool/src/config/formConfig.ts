@@ -1,4 +1,4 @@
-import type { FormSectionConfig, Witness } from "/types";
+import type { FormSectionConfig, Witness } from "@/types";
 
 export const formConfig: FormSectionConfig[] = [
   {
