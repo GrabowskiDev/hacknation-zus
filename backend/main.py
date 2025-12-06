@@ -247,11 +247,13 @@ def detect_skip_with_llm(question_label: str, answer: str) -> bool:
                 "system",
                 (
                     "Jesteś klasyfikatorem odpowiedzi użytkownika.\n"
-                    "Masz ustalić, czy użytkownik WYRAŹNIE odmawia podania informacji, "
-                    "o którą pyta asystent (np. PESEL, adres, data wypadku).\n"
-                    "Jeśli użytkownik odmawia lub mówi, że nie chce podawać tej informacji, "
-                    "odpowiedz dokładnie: YES\n"
-                    "Jeśli użytkownik próbuje odpowiedzieć (nawet nieprecyzyjnie), odpowiedz dokładnie: NO\n"
+                    "Masz ustalić, czy użytkownik NIE poda tej informacji w dalszym procesie, "
+                    "bo albo wyraźnie odmawia, albo mówi, że taka informacja go nie dotyczy "
+                    "(np. nie prowadzi działalności, nie ma NIP-u, nie pamięta daty).\n"
+                    "Jeśli użytkownik odmawia podania informacji lub mówi, że jej nie posiada / "
+                    "go nie dotyczy, odpowiedz dokładnie: YES.\n"
+                    "Jeśli użytkownik próbuje odpowiedzieć (nawet nieprecyzyjnie, ale wygląda na to, "
+                    "że chce udzielić informacji), odpowiedz dokładnie: NO.\n"
                     "Nie tłumacz się, nie dodawaj komentarzy, tylko jedno słowo: YES albo NO."
                 ),
             ),
@@ -287,7 +289,9 @@ def infer_skipped_fields_from_history(history: List[ChatTurn]) -> List[str]:
         text = turn.content
         if ":" not in text:
             continue
-        label = text.split(":")[-2 if text.count(":") > 1 else 0].splitlines()[-1].strip()
+        label = (
+            text.split(":")[-2 if text.count(":") > 1 else 0].splitlines()[-1].strip()
+        )
         field_name = field_name_from_label(label)
         if not field_name:
             continue
