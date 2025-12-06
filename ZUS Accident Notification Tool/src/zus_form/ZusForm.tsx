@@ -1,68 +1,52 @@
-import { Box, Typography } from "@mui/material";
-import type { FormInterface } from "./Interfaces";
+import { useEffect, useState } from "react";
+import { Box } from "@mui/material";
 import FormSection from "./FormSection";
+import { useChat } from "../context/ChatContext";
+import { formConfig } from "./formConfig";
 
-interface ZusFormProps {
-  formContent: FormInterface | null;
-  onFieldChange: (
-    sectionIndex: number,
-    fieldIndex: number,
-    newValue: string
-  ) => void;
-}
+// Flatten config for easier access
+const flatConfig = formConfig.flatMap((section) => section.fields);
 
-function ZusForm({ formContent, onFieldChange }: ZusFormProps) {
-  const handleFieldValidBlur = async (
-    sectionIndex: number,
-    fieldIndex: number,
-    newValue: string
-  ) => {
-    if (!formContent) return;
-    const field = formContent.sections[sectionIndex].fields[fieldIndex];
+function ZusForm() {
+  const { caseState, setCaseState } = useChat();
+  const [localState, setLocalState] = useState<Record<string, string>>({});
 
-    try {
-      const response = await fetch("/api/assistant/message", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          case_id: "default_case",
-          message: `Zaktualizowano pole "${
-            field.label || field.name
-          }" na wartość: "${newValue}"`,
-          mode: "notification",
-          conversation_history: [],
-        }),
-      });
+  useEffect(() => {
+    if (!caseState) return;
 
-      if (!response.ok) {
-        console.error("Failed to send update to backend");
-      }
-    } catch (error) {
-      console.error("Error sending update:", error);
-    }
+    const newLocalState = flatConfig.reduce((acc, field) => {
+      const val = caseState[field.key];
+      acc[field.key] = field.format 
+        ? field.format(val) 
+        : (val === undefined || val === null ? "" : String(val));
+      return acc;
+    }, {} as Record<string, string>);
+
+    setLocalState(newLocalState);
+  }, [caseState]);
+
+  const handleFieldChange = (key: string, newValue: string) => {
+    setLocalState((prev) => ({ ...prev, [key]: newValue }));
   };
 
-  if (!formContent || !formContent.sections) {
-    return (
-      <Box sx={{ p: 3, textAlign: "center" }}>
-        <Typography variant="body1" color="text.secondary">
-          Formularz jest pusty. Rozpocznij rozmowę, aby go wypełnić.
-        </Typography>
-      </Box>
-    );
-  }
+  const handleFieldBlur = (key: string, newValue: string) => {
+    const field = flatConfig.find((f) => f.key === key);
+    
+    setCaseState((prev) => ({
+      ...prev,
+      [key]: field?.parse ? field.parse(newValue) : newValue,
+    }));
+  };
 
   return (
     <Box sx={{ height: "100%", overflowY: "auto", p: 2 }}>
-      {formContent.sections.map((section, index) => (
+      {formConfig.map((section, index) => (
         <FormSection
           key={index}
-          section={section}
-          sectionIndex={index}
-          onFieldChange={onFieldChange}
-          onFieldValidBlur={handleFieldValidBlur}
+          config={section}
+          values={localState}
+          onFieldChange={handleFieldChange}
+          onFieldBlur={handleFieldBlur}
         />
       ))}
     </Box>

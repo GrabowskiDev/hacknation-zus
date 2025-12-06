@@ -62,3 +62,18 @@ export interface AssistantResponse {
   missing_fields: MissingField[];
   case_state_preview: CaseState;
 }
+
+export interface FormFieldConfig {
+  key: keyof CaseState;
+  label: string;
+  type: "text" | "textarea" | "date" | "time";
+  placeholder?: string;
+  regex?: RegExp;
+  format?: (value: any) => string;
+  parse?: (value: string) => any;
+}
+
+export interface FormSectionConfig {
+  title: string;
+  fields: FormFieldConfig[];
+}

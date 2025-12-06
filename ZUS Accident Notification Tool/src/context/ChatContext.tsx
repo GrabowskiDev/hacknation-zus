@@ -6,6 +6,7 @@ import { v4 as uuidv4 } from "uuid";
 interface ChatContextType {
   messages: ChatTurn[];
   caseState: CaseState;
+  setCaseState: React.Dispatch<React.SetStateAction<CaseState>>;
   isLoading: boolean;
   sendMessage: (text: string) => Promise<void>;
   missingFields: string[]; // Lista nazw brakujących pól
@@ -82,7 +83,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
 
   return (
     <ChatContext.Provider
-      value={{ messages, caseState, isLoading, sendMessage, missingFields }}
+      value={{ messages, caseState, setCaseState, isLoading, sendMessage, missingFields }}
     >
       {children}
     </ChatContext.Provider>
