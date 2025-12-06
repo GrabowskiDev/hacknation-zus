@@ -17,7 +17,7 @@ function ConversationalForm() {
 
   // 2. Render purely the UI
   return (
-    <div className="flex flex-col h-full bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden relative">
+    <div className="flex flex-col h-full bg-white border-slate-100 overflow-hidden relative">
       {/* --- Header --- */}
       <div className="h-16 bg-[#007834] flex justify-between items-center px-6 shadow-md z-10">
         <div className="w-10"></div>
