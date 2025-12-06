@@ -11,7 +11,7 @@ import { ChatProvider } from "./context/ChatContext";
 
 function App() {
   return (
-    <main className="flex justify-center items-center h-screen">
+    <main className="flex justify-center items-center h-screen gap-8">
       <StyledEngineProvider injectFirst>
         <ThemeProvider theme={theme}>
           <CssBaseline />

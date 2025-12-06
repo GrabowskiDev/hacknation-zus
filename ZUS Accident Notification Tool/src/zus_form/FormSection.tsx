@@ -17,7 +17,7 @@ function FormSection({
   onFieldBlur,
 }: FormSectionProps) {
   return (
-    <Paper elevation={3} sx={{ p: 3, mb: 3 }}>
+    <Paper elevation={3} sx={{ p: 3, mb: 3, borderRadius: 4 }}>
       <Typography variant="h6" gutterBottom>
         {config.title}
       </Typography>
