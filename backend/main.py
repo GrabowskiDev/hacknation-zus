@@ -87,10 +87,6 @@ class AssistantMessageRequest(BaseModel):
         default=None,
         description="Aktualny stan sprawy utrzymywany po stronie frontendu (opcjonalny)",
     )
-    skipped_fields: List[str] = Field(
-        default_factory=list,
-        description="Pola, których użytkownik nie chce podawać (frontend je oznacza)",
-    )
 
 
 class AssistantMessageResponse(BaseModel):
@@ -166,37 +162,99 @@ def simple_missing_fields(
     return result
 
 
+FIELD_LABELS: dict[str, str] = {
+    # Dane poszkodowanego
+    "first_name": "imię poszkodowanego",
+    "last_name": "nazwisko poszkodowanego",
+    "pesel": "PESEL poszkodowanego",
+    "date_of_birth": "data urodzenia poszkodowanego",
+    "address_home": "adres zamieszkania poszkodowanego",
+    "address_correspondence": "adres do korespondencji",
+    # Dane działalności
+    "nip": "NIP działalności",
+    "regon": "REGON działalności",
+    "business_address": "adres prowadzenia działalności",
+    "pkd": "kod PKD działalności",
+    "business_description": "opis rodzaju prowadzonej działalności",
+    # Informacje o wypadku
+    "accident_date": "data wypadku",
+    "accident_time": "godzina wypadku",
+    "accident_place": "miejsce wypadku",
+    "planned_work_start": "planowana godzina rozpoczęcia pracy",
+    "planned_work_end": "planowana godzina zakończenia pracy",
+    "injury_type": "rodzaj urazu",
+    "accident_description": "opis okoliczności i przyczyn wypadku",
+    "first_aid_info": "informacje o udzielonej pierwszej pomocy / szpitalu",
+    "proceedings_info": "informacje o postępowaniu (policja, prokuratura itp.)",
+    "equipment_info": "informacje o maszynach/urządzeniach, BHP, środkach ochrony",
+}
+
+
 def human_field_label(field_name: str) -> str:
     """
     Przyjazne nazwy pól do komunikatu dla użytkownika.
     """
-    labels = {
-        # Dane poszkodowanego
-        "first_name": "imię poszkodowanego",
-        "last_name": "nazwisko poszkodowanego",
-        "pesel": "PESEL poszkodowanego",
-        "date_of_birth": "data urodzenia poszkodowanego",
-        "address_home": "adres zamieszkania poszkodowanego",
-        "address_correspondence": "adres do korespondencji",
-        # Dane działalności
-        "nip": "NIP działalności",
-        "regon": "REGON działalności",
-        "business_address": "adres prowadzenia działalności",
-        "pkd": "kod PKD działalności",
-        "business_description": "opis rodzaju prowadzonej działalności",
-        # Informacje o wypadku
-        "accident_date": "data wypadku",
-        "accident_time": "godzina wypadku",
-        "accident_place": "miejsce wypadku",
-        "planned_work_start": "planowana godzina rozpoczęcia pracy",
-        "planned_work_end": "planowana godzina zakończenia pracy",
-        "injury_type": "rodzaj urazu",
-        "accident_description": "opis okoliczności i przyczyn wypadku",
-        "first_aid_info": "informacje o udzielonej pierwszej pomocy / szpitalu",
-        "proceedings_info": "informacje o postępowaniu (policja, prokuratura itp.)",
-        "equipment_info": "informacje o maszynach/urządzeniach, BHP, środkach ochrony",
-    }
-    return labels.get(field_name, field_name)
+    return FIELD_LABELS.get(field_name, field_name)
+
+
+def field_name_from_label(label: str) -> Optional[str]:
+    for key, value in FIELD_LABELS.items():
+        if value == label:
+            return key
+    return None
+
+
+def message_looks_like_skip(text: str) -> bool:
+    """
+    Bardzo prosta heurystyka: czy użytkownik chce pominąć odpowiedź.
+    """
+    t = text.strip().lower()
+    if not t:
+        return False
+    phrases = [
+        "nie chcę podawać",
+        "nie chce podawać",
+        "nie chcę tego podawać",
+        "nie chce tego podawać",
+        "nie chcę podać",
+        "nie chce podać",
+        "nie podam",
+        "wolę nie podawać",
+        "wole nie podawac",
+        "wolę nie mówić",
+        "wolę nie mowic",
+        "nie chcę mówić",
+        "nie chce mowic",
+        "pomiń",
+        "pomin",
+        "pomijamy",
+    ]
+    return any(p in t for p in phrases)
+
+
+def infer_skipped_fields_from_history(history: List[ChatTurn]) -> List[str]:
+    """
+    Przechodzi po historii:
+    - gdy asystent pyta o konkretne pole,
+    - a kolejna odpowiedź użytkownika wygląda jak odmowa,
+    - oznaczamy to pole jako "skipped".
+    """
+    skipped: set[str] = set()
+    for i in range(len(history) - 1):
+        turn = history[i]
+        next_turn = history[i + 1]
+        if turn.role != "assistant" or next_turn.role != "user":
+            continue
+        text = turn.content
+        if ":" not in text:
+            continue
+        label = text.split(":")[-2 if text.count(":") > 1 else 0].splitlines()[-1].strip()
+        field_name = field_name_from_label(label)
+        if not field_name:
+            continue
+        if message_looks_like_skip(next_turn.content):
+            skipped.add(field_name)
+    return list(skipped)
 
 
 def extract_case_state_with_llm(
@@ -289,7 +347,6 @@ def run_assistant_pipeline(
     mode: Mode,
     previous_state: Optional[CaseState] = None,
     conversation_history: Optional[List[ChatTurn]] = None,
-    skipped_fields: Optional[List[str]] = None,
 ) -> AssistantMessageResponse:
     """
     Miejsce na LangChain:
@@ -321,8 +378,30 @@ def run_assistant_pipeline(
         conversation_history=history,
     )
 
+    # Wyznacz pola, których użytkownik nie chce podawać – na podstawie historii + bieżącej odpowiedzi.
+    skipped_from_history = set(infer_skipped_fields_from_history(history))
+    # Sprawdź, czy bieżąca wiadomość jest odmową odpowiedzi na ostatnie pytanie asystenta.
+    skipped_current: set[str] = set()
+    if history:
+        last_assistant = next(
+            (t for t in reversed(history) if t.role == "assistant"), None
+        )
+        if last_assistant and message_looks_like_skip(message):
+            text = last_assistant.content
+            if ":" in text:
+                label = (
+                    text.split(":")[-2 if text.count(":") > 1 else 0]
+                    .splitlines()[-1]
+                    .strip()
+                )
+                field_name = field_name_from_label(label)
+                if field_name:
+                    skipped_current.add(field_name)
+
+    skipped_all = list(skipped_from_history | skipped_current)
+
     # Sprawdź braki obowiązkowe (dla missing_fields), ignorując pola, które użytkownik świadomie pominął.
-    missing = simple_missing_fields(case_state, mode, skipped_fields=skipped_fields)
+    missing = simple_missing_fields(case_state, mode, skipped_fields=skipped_all)
 
     # Kolejność WSZYSTKICH pól, o które chcemy po kolei pytać,
     # tak długo jak użytkownik nie odmówi (skipped_fields) i pole jest puste.
@@ -353,7 +432,7 @@ def run_assistant_pipeline(
         "equipment_info",
     ]
 
-    skipped = set(skipped_fields or [])
+    skipped = set(skipped_all)
     next_field = None
     for name in question_order:
         if name in skipped:
@@ -405,5 +484,4 @@ async def assistant_message(
         mode=payload.mode,
         previous_state=payload.case_state,
         conversation_history=payload.conversation_history,
-        skipped_fields=payload.skipped_fields,
     )
