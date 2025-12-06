@@ -6,6 +6,7 @@ from typing import Any, List, Optional
 from datetime import date
 from dotenv import load_dotenv
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.output_parsers import PydanticOutputParser
@@ -86,6 +87,10 @@ class AssistantMessageRequest(BaseModel):
         default=None,
         description="Aktualny stan sprawy utrzymywany po stronie frontendu (opcjonalny)",
     )
+    skipped_fields: List[str] = Field(
+        default_factory=list,
+        description="Pola, których użytkownik nie chce podawać (frontend je oznacza)",
+    )
 
 
 class AssistantMessageResponse(BaseModel):
@@ -95,6 +100,13 @@ class AssistantMessageResponse(BaseModel):
 
 
 app = FastAPI(title="ZANT Backend", version="0.1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # na potrzeby hackathonu puszczamy wszystko
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/")
@@ -115,7 +127,11 @@ def get_llm() -> Optional[Any]:
     )
 
 
-def simple_missing_fields(case_state: CaseState, mode: Mode) -> List[MissingField]:
+def simple_missing_fields(
+    case_state: CaseState,
+    mode: Mode,
+    skipped_fields: Optional[List[str]] = None,
+) -> List[MissingField]:
     """
     Bardzo prosty checker braków.
     Docelowo tu możesz zakodować wymagane pola dla różnych trybów.
@@ -130,8 +146,11 @@ def simple_missing_fields(case_state: CaseState, mode: Mode) -> List[MissingFiel
     else:
         required.update(required_wyjasnienia)
 
+    skipped = set(skipped_fields or [])
     result: List[MissingField] = []
     for field_name in required:
+        if field_name in skipped:
+            continue
         value = getattr(case_state, field_name, None)
         if value is None or (isinstance(value, str) and not value.strip()):
             result.append(MissingField(field=field_name, reason="brak wartości"))
@@ -152,6 +171,20 @@ def human_field_label(field_name: str) -> str:
     Przyjazne nazwy pól do komunikatu dla użytkownika.
     """
     labels = {
+        # Dane poszkodowanego
+        "first_name": "imię poszkodowanego",
+        "last_name": "nazwisko poszkodowanego",
+        "pesel": "PESEL poszkodowanego",
+        "date_of_birth": "data urodzenia poszkodowanego",
+        "address_home": "adres zamieszkania poszkodowanego",
+        "address_correspondence": "adres do korespondencji",
+        # Dane działalności
+        "nip": "NIP działalności",
+        "regon": "REGON działalności",
+        "business_address": "adres prowadzenia działalności",
+        "pkd": "kod PKD działalności",
+        "business_description": "opis rodzaju prowadzonej działalności",
+        # Informacje o wypadku
         "accident_date": "data wypadku",
         "accident_time": "godzina wypadku",
         "accident_place": "miejsce wypadku",
@@ -248,12 +281,15 @@ def extract_case_state_with_llm(
                 or previous_state.accident_description
             }
         )
+
+
 def run_assistant_pipeline(
     case_id: str,
     message: str,
     mode: Mode,
     previous_state: Optional[CaseState] = None,
     conversation_history: Optional[List[ChatTurn]] = None,
+    skipped_fields: Optional[List[str]] = None,
 ) -> AssistantMessageResponse:
     """
     Miejsce na LangChain:
@@ -285,19 +321,65 @@ def run_assistant_pipeline(
         conversation_history=history,
     )
 
-    missing = simple_missing_fields(case_state, mode)
+    # Sprawdź braki obowiązkowe (dla missing_fields), ignorując pola, które użytkownik świadomie pominął.
+    missing = simple_missing_fields(case_state, mode, skipped_fields=skipped_fields)
 
-    if missing:
-        missing_names = ", ".join(human_field_label(m.field) for m in missing)
-        assistant_reply = (
-            "Dziękuję za opis sytuacji. "
-            f"Brakuje mi jeszcze następujących informacji: {missing_names}. "
-            "Proszę je uzupełnić prostym opisem po polsku."
-        )
+    # Kolejność WSZYSTKICH pól, o które chcemy po kolei pytać,
+    # tak długo jak użytkownik nie odmówi (skipped_fields) i pole jest puste.
+    question_order = [
+        # Dane poszkodowanego
+        "first_name",
+        "last_name",
+        "pesel",
+        "date_of_birth",
+        "address_home",
+        "address_correspondence",
+        # Dane działalności
+        "nip",
+        "regon",
+        "business_address",
+        "pkd",
+        "business_description",
+        # Informacje o wypadku
+        "accident_date",
+        "accident_time",
+        "accident_place",
+        "planned_work_start",
+        "planned_work_end",
+        "injury_type",
+        "accident_description",
+        "first_aid_info",
+        "proceedings_info",
+        "equipment_info",
+    ]
+
+    skipped = set(skipped_fields or [])
+    next_field = None
+    for name in question_order:
+        if name in skipped:
+            continue
+        value = getattr(case_state, name, None)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            next_field = name
+            break
+
+    if next_field:
+        label = human_field_label(next_field)
+        # Pierwsza interakcja — przedstaw zasady raz na początku.
+        if not history:
+            assistant_reply = (
+                "Dzień dobry! Opisz proszę, co się wydarzyło.\n\n"
+                "Następnie zadam po kolei krótkie pytania o dane do formularza. "
+                "Na każde możesz odpowiedzieć albo napisać, że nie chcesz podawać tej informacji – wtedy przejdziemy dalej.\n\n"
+                f"Na początek: {label}:"
+            )
+        else:
+            # Kolejne pytania – bardzo krótkie, tylko etykieta pola.
+            assistant_reply = f"{label}:"
     else:
         assistant_reply = (
-            "Dziękuję, na ten moment mam komplet podstawowych informacji. "
-            "Możemy przejść do przygotowania projektu dokumentu."
+            "Dziękuję, to wszystkie pytania o dane wymagane w formularzu. "
+            "Jeśli chcesz coś doprecyzować lub dodać, napisz to w kolejnej wiadomości."
         )
 
     return AssistantMessageResponse(
@@ -323,4 +405,5 @@ async def assistant_message(
         mode=payload.mode,
         previous_state=payload.case_state,
         conversation_history=payload.conversation_history,
+        skipped_fields=payload.skipped_fields,
     )
