@@ -189,12 +189,56 @@ FIELD_LABELS: dict[str, str] = {
     "equipment_info": "informacje o maszynach/urządzeniach, BHP, środkach ochrony",
 }
 
+# Kategorie pytań – grupujemy pola w logiczne sekcje.
+CATEGORY_DEFS: list[tuple[str, str, list[str]]] = [
+    (
+        "person",
+        "dane poszkodowanego",
+        [
+            "first_name",
+            "last_name",
+            "pesel",
+            "date_of_birth",
+            "address_home",
+            "address_correspondence",
+        ],
+    ),
+    (
+        "business",
+        "dane działalności",
+        ["nip", "regon", "business_address", "pkd", "business_description"],
+    ),
+    (
+        "accident",
+        "informacje o wypadku",
+        [
+            "accident_date",
+            "accident_time",
+            "accident_place",
+            "planned_work_start",
+            "planned_work_end",
+            "injury_type",
+            "accident_description",
+            "first_aid_info",
+            "proceedings_info",
+            "equipment_info",
+        ],
+    ),
+]
+
 
 def human_field_label(field_name: str) -> str:
     """
     Przyjazne nazwy pól do komunikatu dla użytkownika.
     """
     return FIELD_LABELS.get(field_name, field_name)
+
+
+def find_category_for_field(field_name: str) -> Optional[tuple[str, str, list[str]]]:
+    for cat in CATEGORY_DEFS:
+        if field_name in cat[2]:
+            return cat
+    return None
 
 
 def field_name_from_label(label: str) -> Optional[str]:
@@ -486,17 +530,31 @@ def run_assistant_pipeline(
             break
 
     if next_field:
-        label = human_field_label(next_field)
-        # Pierwsza interakcja — przedstaw zasady raz na początku.
-        if not history:
-            assistant_reply = (
-                "Dzień dobry! Opisz proszę, co się wydarzyło.\n\n"
-                "Następnie zadam po kolei krótkie pytania o dane do formularza. "
-                "Na każde możesz odpowiedzieć albo napisać, że nie chcesz podawać tej informacji – wtedy przejdziemy dalej.\n\n"
-                f"Na początek: {label}:"
-            )
+        category = find_category_for_field(next_field)
+        if category is not None:
+            _, category_label, category_fields = category
+            labels = [human_field_label(name) for name in category_fields]
+            fields_list = ", ".join(labels)
+
+            # Pierwsza interakcja — przedstaw zasady raz na początku.
+            if not history:
+                assistant_reply = (
+                    "Dzień dobry! Opisz proszę, co się wydarzyło.\n\n"
+                    "Następnie przejdziemy po kilku grupach pytań potrzebnych do formularza. "
+                    "W każdej grupie możesz odpowiedzieć na tyle, na ile chcesz – "
+                    "jeśli czegoś nie chcesz podawać, po prostu napisz, że tę informację pomijamy.\n\n"
+                    f"Zacznijmy od kategorii: {category_label}. "
+                    f"Podaj proszę: {fields_list}."
+                )
+            else:
+                # Kolejne pytania – jedna grupa pól na raz.
+                assistant_reply = (
+                    f"Teraz kategoria: {category_label}. "
+                    f"Podaj proszę: {fields_list}."
+                )
         else:
-            # Kolejne pytania – bardzo krótkie, tylko etykieta pola.
+            # Gdyby pole nie należało do żadnej kategorii (nie powinno się zdarzyć).
+            label = human_field_label(next_field)
             assistant_reply = f"{label}:"
     else:
         assistant_reply = (
