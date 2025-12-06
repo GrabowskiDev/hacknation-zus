@@ -10,6 +10,7 @@ import { CssBaseline, StyledEngineProvider } from "@mui/material";
 import { mockFormData as zusMockFormData } from "./zus_form/mockData";
 import ZusForm from "./zus_form/ZusForm";
 import type { FormInterface } from "./zus_form/Interfaces";
+import { ChatProvider } from "./context/ChatContext";
 
 function App() {
   const [formData, setFormData] = useState<FormInterface | null>(
@@ -34,8 +35,10 @@ function App() {
       <StyledEngineProvider injectFirst>
         <ThemeProvider theme={theme}>
           <CssBaseline />
-          <ConversationalForm />
-          <ZusForm formContent={formData} onFieldChange={handleFieldChange} />
+          <ChatProvider>
+            <ConversationalForm />
+            <ZusForm formContent={formData} onFieldChange={handleFieldChange} />
+          </ChatProvider>
         </ThemeProvider>
       </StyledEngineProvider>
     </main>
