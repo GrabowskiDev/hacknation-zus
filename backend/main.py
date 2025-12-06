@@ -91,10 +91,21 @@ class AssistantMessageRequest(BaseModel):
     )
 
 
+class ActionStep(BaseModel):
+    step_number: int = Field(..., description="Numer kolejny kroku")
+    description: str = Field(..., description="Opis czynności do wykonania")
+    required_documents: List[str] = Field(default_factory=list, description="Lista wymaganych dokumentów dla tego kroku")
+
+
+class ActionPlan(BaseModel):
+    actions: List[ActionStep] = Field(default_factory=list, description="Lista kroków do wykonania")
+
+
 class AssistantMessageResponse(BaseModel):
     assistant_reply: str
     missing_fields: List[MissingField]
     case_state_preview: CaseState
+    recommended_actions: Optional[List[ActionStep]] = None
 
 
 class CaseDocument(BaseModel):
@@ -583,12 +594,78 @@ def extract_case_state_with_llm(
         return updated_state
     except Exception as e:
         # Fallback: tylko podmień opis wypadku na podstawie wiadomości
+        print(f"BŁĄD LLM: {e}") 
+
         return previous_state.model_copy(
             update={
                 "accident_description": message.strip()
                 or previous_state.accident_description
             }
         )
+def generate_post_accident_actions(case_state: CaseState) -> List[ActionStep]:
+    """
+    Generuje spersonalizowaną listę kroków i dokumentów na podstawie zebranych danych.
+    """
+    llm = get_llm()
+    if llm is None:
+        return []
+
+    # Używamy PydanticOutputParser z wrapperem ActionPlan, aby uzyskać poprawną strukturę listy.
+    parser = PydanticOutputParser(pydantic_object=ActionPlan)
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                (
+                    "Jesteś ekspertem ZUS i wirtualnym doradcą w systemie ZANT (ZUS Accident Notification Tool). "
+                    "Twoim zadaniem jest wygenerowanie spersonalizowanej listy czynności (Action Plan) dla użytkownika, "
+                    "który zgłasza wypadek.\n\n"
+                    "ANALIZA SYTUACJI (na podstawie CaseState):\n"
+                    "1. Sprawdź, czy poszkodowany jest Przedsiębiorcą (wypełnione NIP, REGON, business_description) czy Pracownikiem.\n"
+                    "2. Sprawdź rodzaj wypadku (przy pracy, w drodze, inny).\n\n"
+                    "ZASADY GENEROWANIA KROKÓW (zgodnie z wytycznymi ZUS):\n"
+                    "- Jeśli to PRZEDSIĘBIORCA (Wypadek przy pracy):\n"
+                    "  1. Zgłoszenie wypadku w placówce ZUS (pisemnie lub przez PUE).\n"
+                    "  2. Złożenie wniosku o ustalenie okoliczności wypadku (Karta Wypadku).\n"
+                    "  3. Skompletowanie dokumentacji medycznej (zaświadczenie OL-9 lub N-9).\n"
+                    "  4. Wypełnienie druku ZUS Z-3b (zaświadczenie płatnika składek).\n"
+                    "- Jeśli to PRACOWNIK:\n"
+                    "  1. Zgłoszenie wypadku pracodawcy (niezwłocznie).\n"
+                    "  2. Udział w sporządzeniu Protokołu Powypadkowego (przez zespół powypadkowy).\n"
+                    "  3. Przekazanie pracodawcy druku ZUS Z-15 (wniosek o zasiłek) i ZUS Z-3 (wypełnia pracodawca).\n"
+                    "- Jeśli WYPADEK W DRODZE DO PRACY:\n"
+                    "  1. Zgłoszenie pracodawcy/zleceniodawcy.\n"
+                    "  2. Karta wypadku w drodze do pracy.\n\n"
+                    "WYMAGANIA DLA ODPOWIEDZI:\n"
+                    "- Zwróć obiekt JSON zgodny ze schematem ActionPlan (zawierający listę 'actions').\n"
+                    "- Pola kroku: 'step_number' (int), 'description' (str), 'required_documents' (list[str]).\n"
+                    "- Bądź precyzyjny i pomocny. Używaj oficjalnych nazw druków ZUS.\n\n"
+                    "{format_instructions}"
+                ),
+            ),
+            (
+                "human",
+                (
+                    "Dane zgłoszenia (CaseState):\n"
+                    "{case_state}\n\n"
+                    "Przygotuj listę kroków (actions) wraz z opisem (description) i wymaganymi dokumentami (required_documents)."
+                ),
+            ),
+        ]
+    )
+
+    chain = prompt | llm | parser
+
+    try:
+        result: ActionPlan = chain.invoke({
+            "case_state": case_state.model_dump_json(),
+            "format_instructions": parser.get_format_instructions()
+        })
+        return result.actions
+    except Exception as e:
+        print(f"Błąd generowania zaleceń: {e}")
+        return []
 
 
 def run_assistant_pipeline(
@@ -751,9 +828,27 @@ def run_assistant_pipeline(
             label = human_field_label(next_field)
             assistant_reply = f"{label}:"
     else:
+        # To jest moment, w którym generujemy raport końcowy i zalecenia
+        
+        # Wywołaj LLM z promptem:
+        # "Na podstawie zgromadzonych danych (CaseState):
+        # 1. Czy to był wypadek w drodze, czy przy pracy?
+        # 2. Jakie dokumenty są wymagane dla tego konkretnego przypadku?
+        # 3. Jakie kroki musi podjąć użytkownik?
+        # Zwróć listę ActionStep."
+        
+        actions = generate_post_accident_actions(case_state) # Nowa funkcja z LLM
+        
         assistant_reply = (
             "Dziękuję, to wszystkie pytania o dane wymagane w formularzu. "
-            "Jeśli chcesz coś doprecyzować lub dodać, napisz to w kolejnej wiadomości."
+            "Poniżej znajdziesz listę kroków, które powinieneś teraz podjąć."
+        )
+
+        return AssistantMessageResponse(
+            assistant_reply=assistant_reply,
+            missing_fields=missing,
+            case_state_preview=case_state,
+            recommended_actions=actions
         )
 
     return AssistantMessageResponse(
