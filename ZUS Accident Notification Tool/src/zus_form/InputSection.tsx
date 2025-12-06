@@ -9,7 +9,12 @@ interface InputSectionProps {
 }
 
 function InputSection({ field, onChange, onValidBlur }: InputSectionProps) {
-  const [error, setError] = useState(false);
+  const [error, setError] = useState(() => {
+    if (field.regex && field.currentValue) {
+      return !field.regex.test(field.currentValue);
+    }
+    return false;
+  });
 
   const handleBlur = () => {
     if (field.regex) {
@@ -23,6 +28,18 @@ function InputSection({ field, onChange, onValidBlur }: InputSectionProps) {
     }
   };
 
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const newValue = e.target.value;
+    onChange(newValue);
+    
+    if (error && field.regex) {
+      setError(!field.regex.test(newValue));
+    }
+  };
+
+  const isMultiline = field.inputType === "textarea" || field.inputType === "text";
+  const isTextarea = field.inputType === "textarea";
+
   return (
     <Box sx={{ mb: 2 }}>
       <TextField
@@ -33,11 +50,19 @@ function InputSection({ field, onChange, onValidBlur }: InputSectionProps) {
         variant="outlined"
         error={error}
         helperText={error ? "Nieprawidłowy format" : field.formatPlaceholder}
-        onChange={(e) => {
-          onChange(e.target.value);
-          if (error) setError(false);
-        }}
+        onChange={handleChange}
         onBlur={handleBlur}
+        multiline={isMultiline}
+        minRows={isTextarea ? 3 : 1}
+        sx={{
+          "& .MuiOutlinedInput-root.Mui-error .MuiOutlinedInput-notchedOutline": {
+            borderColor: "#d32f2f", // Standard MUI error red
+            borderWidth: "2px",
+          },
+          "& .MuiFormHelperText-root.Mui-error": {
+            color: "#d32f2f",
+          },
+        }}
       />
     </Box>
   );
