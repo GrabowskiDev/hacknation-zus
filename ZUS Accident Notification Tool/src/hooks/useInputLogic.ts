@@ -1,6 +1,10 @@
 import { useState } from "react";
+import type { ChangeEvent, FocusEvent } from "react";
 import type { FormFieldConfig } from "@/types";
 import { validateField } from "@/utils/validation";
+
+// Definiujemy unię typów, aby obsłużyć Input, Textarea oraz Select
+type FormElement = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
 
 export const useInputLogic = (
   config: FormFieldConfig,
@@ -11,7 +15,8 @@ export const useInputLogic = (
   const [error, setError] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
 
-  const handleBlur = () => {
+  // Dodajemy typowanie zdarzenia FocusEvent<FormElement>
+  const handleBlur = (e?: FocusEvent<FormElement>) => {
     setIsFocused(false);
     const isValid = validateField(value, config.regex);
     setError(!isValid);
@@ -20,9 +25,8 @@ export const useInputLogic = (
     }
   };
 
-  const handleChange = (
-    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
-  ) => {
+  // Kluczowa poprawka: ChangeEvent<FormElement> obsługuje teraz selecta
+  const handleChange = (e: ChangeEvent<FormElement>) => {
     const newValue = e.target.value;
     onChange(newValue);
 
