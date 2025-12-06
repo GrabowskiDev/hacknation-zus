@@ -37,7 +37,7 @@ function App() {
           <CssBaseline />
           <ChatProvider>
             <ConversationalForm />
-            <ZusForm formContent={formData} onFieldChange={handleFieldChange} />
+            <ZusForm />
           </ChatProvider>
         </ThemeProvider>
       </StyledEngineProvider>

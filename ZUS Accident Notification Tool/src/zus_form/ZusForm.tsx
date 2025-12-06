@@ -28,7 +28,9 @@ function ZusForm({ formContent, onFieldChange }: ZusFormProps) {
         },
         body: JSON.stringify({
           case_id: "default_case",
-          message: `Zaktualizowano pole "${field.label || field.name}" na wartość: "${newValue}"`,
+          message: `Zaktualizowano pole "${
+            field.label || field.name
+          }" na wartość: "${newValue}"`,
           mode: "notification",
           conversation_history: [],
         }),
