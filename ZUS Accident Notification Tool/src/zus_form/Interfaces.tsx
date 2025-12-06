@@ -2,7 +2,7 @@ export interface FieldInterface {
   name: string;
   label?: string;
   inputType: string;
-  validationRule?: (value: any) => boolean;
+  regex?: RegExp;
   currentValue: string;
   formatPlaceholder?: string;
 }
