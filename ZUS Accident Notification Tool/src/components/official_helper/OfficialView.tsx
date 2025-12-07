@@ -1,75 +1,44 @@
-import React, { useState } from "react";
+import React from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   Upload,
   FileText,
-  CheckCircle,
-  XCircle,
   Loader2,
   AlertCircle,
+  FileOutput,
+  Trash2, // Import ikonki kosza
 } from "lucide-react";
-
-// Typy dla wyniku analizy
-interface AnalysisResult {
-  decision: "approved" | "rejected";
-  confidence: number;
-  justification: string[];
-  draftOpinion: string;
-}
+import { useAccidentAnalysis } from "@/hooks/useAccidentAnalysis";
 
 function OfficialView() {
-  const [files, setFiles] = useState<File[]>([]);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [result, setResult] = useState<AnalysisResult | null>(null);
-
-  // Obsługa wyboru plików
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      setFiles(Array.from(e.target.files));
-      setResult(null); // Reset wyników po dodaniu nowych plików
-    }
-  };
-
-  // Symulacja analizy AI (Mock)
-  const handleAnalyze = () => {
-    if (files.length === 0) return;
-
-    setIsAnalyzing(true);
-
-    // Symulujemy opóźnienie 2 sekundy (normalnie tu byłby fetch do backendu)
-    setTimeout(() => {
-      setIsAnalyzing(false);
-      setResult({
-        decision: "approved", // lub "rejected"
-        confidence: 94,
-        justification: [
-          "Zdarzenie miało charakter nagły (upadek z drabiny).",
-          "Przyczyna zewnętrzna potwierdzona (pęknięcie szczebla).",
-          "Uraz udokumentowany w karcie informacyjnej ze szpitala (złamanie kości piszczelowej).",
-          "Związek z pracą zachowany (malowanie lokalu usługowego).",
-        ],
-        draftOpinion: `OPINIA W SPRAWIE UZNANIA ZDARZENIA ZA WYPADEK PRZY PRACY\n\nNa podstawie przedłożonej dokumentacji, zdarzenie z dnia 12.12.2024 r. uznaje się za wypadek przy pracy.\n\nUZASADNIENIE:\nAnaliza zgromadzonego materiału dowodowego wykazała spełnienie wszystkich przesłanek definicji wypadku przy pracy określonych w art. 3 ustawy wypadkowej. Zdarzenie było nagłe, wywołane przyczyną zewnętrzną i nastąpiło w związku z wykonywaniem czynności w ramach prowadzonej działalności gospodarczej.`,
-      });
-    }, 2500);
-  };
+  const {
+    files,
+    isAnalyzing,
+    markdownResult,
+    error,
+    handleFileChange,
+    removeFile, // Pobieramy funkcję usuwania
+    handleAnalyze,
+    copyToClipboard,
+  } = useAccidentAnalysis();
 
   return (
     <main className="flex flex-col justify-center h-screen w-full bg-slate-50 p-4 lg:p-8 overflow-y-auto custom-scrollbar">
-      {/* Nagłówek */}
-      <div className="max-w-5xl mx-auto w-full mb-8">
+      <div className="max-w-6xl mx-auto w-full mb-8">
         <h1 className="text-2xl font-bold text-[#007834] mb-2">
-          Panel Decyzyjny (ZANT II)
+          Panel Decyzyjny (ZANT II) - Widok Raportu
         </h1>
         <p className="text-slate-600">
-          Moduł wsparcia dla pracowników ZUS. Wgraj dokumentację (PDF), aby
-          uzyskać wstępną kwalifikację zdarzenia i projekt opinii.
+          Wgraj pliki PDF, aby wygenerować zbiorcze podsumowanie faktów
+          (Markdown).
         </p>
       </div>
 
-      <div className="max-w-5xl mx-auto w-full grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* LEWA KOLUMNA: Upload */}
-        <div className="lg:col-span-1 flex flex-col gap-6">
-          {/* Obszar Dropzone */}
-          <div className="bg-white p-6 rounded-2xl shadow-sm border-2 border-dashed border-slate-300 hover:border-[#007834] transition-colors flex flex-col items-center justify-center text-center h-64 group">
+      <div className="max-w-6xl mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-8">
+        {/* LEWA KOLUMNA: Upload (Mniejsza - 4/12) */}
+        <div className="lg:col-span-4 flex flex-col gap-6">
+          <div className="bg-white p-6 rounded-2xl shadow-sm border-2 border-dashed border-slate-300 hover:border-[#007834] transition-colors flex flex-col items-center justify-center text-center h-64 group relative">
             <input
               type="file"
               multiple
@@ -86,32 +55,49 @@ function OfficialView() {
                 <Upload size={32} />
               </div>
               <span className="font-semibold text-slate-700">
-                Wybierz pliki PDF
+                Wgraj pliki PDF
               </span>
               <span className="text-xs text-slate-400 mt-2">
-                Maksymalnie 20MB
+                Kliknij, aby dodać kolejne
               </span>
             </label>
           </div>
 
-          {/* Lista plików */}
           {files.length > 0 && (
             <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-              <div className="p-4 bg-slate-50 border-b border-slate-100 font-semibold text-sm text-slate-700">
-                Wgrane dokumenty ({files.length})
+              <div className="p-4 bg-slate-50 border-b border-slate-100 font-semibold text-sm text-slate-700 flex justify-between items-center">
+                <span>Dokumentacja ({files.length})</span>
               </div>
-              <ul className="divide-y divide-slate-100">
+
+              {/* Lista plików */}
+              <ul className="divide-y divide-slate-100 max-h-60 overflow-y-auto custom-scrollbar">
                 {files.map((file, idx) => (
                   <li
-                    key={idx}
-                    className="p-3 flex items-center gap-3 text-sm text-slate-600"
+                    key={`${file.name}-${idx}`}
+                    className="p-3 flex items-center justify-between gap-3 text-sm text-slate-600 group hover:bg-slate-50 transition-colors"
                   >
-                    <FileText size={16} className="text-[#007834]" />
-                    <span className="truncate">{file.name}</span>
+                    <div className="flex items-center gap-3 overflow-hidden">
+                      <FileText size={16} className="text-[#007834] shrink-0" />
+                      <span className="truncate" title={file.name}>
+                        {file.name}
+                      </span>
+                    </div>
+
+                    {/* Przycisk usuwania */}
+                    {!isAnalyzing && (
+                      <button
+                        onClick={() => removeFile(idx)}
+                        className="text-slate-400 hover:text-red-600 hover:bg-red-50 p-1.5 rounded-md transition-all"
+                        title="Usuń plik"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>
-              <div className="p-4">
+
+              <div className="p-4 border-t border-slate-50">
                 <button
                   onClick={handleAnalyze}
                   disabled={isAnalyzing}
@@ -119,110 +105,63 @@ function OfficialView() {
                 >
                   {isAnalyzing ? (
                     <>
-                      <Loader2 className="animate-spin" size={18} />{" "}
-                      Analizuję...
+                      <Loader2 className="animate-spin" size={18} />
+                      Przetwarzam...
                     </>
                   ) : (
-                    "Rozpocznij Analizę"
+                    "Generuj Raport"
                   )}
                 </button>
               </div>
             </div>
           )}
+
+          {error && (
+            <div className="p-4 bg-red-50 text-red-700 rounded-xl text-sm border border-red-200 flex items-start gap-2">
+              <AlertCircle size={18} className="shrink-0 mt-0.5" />
+              {error}
+            </div>
+          )}
         </div>
 
-        {/* PRAWA KOLUMNA: Wyniki */}
-        <div className="lg:col-span-2">
-          {!result && !isAnalyzing && (
-            <div className="h-full flex flex-col items-center justify-center text-slate-400 border-2 border-dashed border-slate-200 rounded-2xl min-h-[300px]">
-              <AlertCircle size={48} className="mb-4 opacity-20" />
-              <p>Wyniki analizy pojawią się tutaj</p>
+        {/* PRAWA KOLUMNA: Renderowanie Markdown (Większa - 8/12) */}
+        <div className="lg:col-span-8 text-black">
+          {!markdownResult && !isAnalyzing && (
+            <div className="h-full flex flex-col items-center justify-center text-slate-400 border-2 border-dashed border-slate-200 rounded-2xl min-h-[400px]">
+              <FileOutput size={48} className="mb-4 opacity-20" />
+              <p>Tutaj pojawi się wygenerowany dokument</p>
             </div>
           )}
 
           {isAnalyzing && (
-            <div className="h-full flex flex-col items-center justify-center bg-white rounded-2xl shadow-sm border border-slate-100 min-h-[300px]">
+            <div className="h-full flex flex-col items-center justify-center bg-white rounded-2xl shadow-sm border border-slate-100 min-h-[400px]">
               <Loader2 size={64} className="text-[#007834] animate-spin mb-6" />
               <h3 className="text-lg font-semibold text-slate-700">
-                Przetwarzanie dokumentacji...
+                Analiza treści...
               </h3>
-              <p className="text-slate-500 text-sm mt-2">
-                Weryfikacja przesłanek wypadku przy pracy
-              </p>
             </div>
           )}
 
-          {result && (
-            <div className="flex flex-col gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-              {/* Karta Decyzji */}
-              <div
-                className={`p-6 rounded-2xl border flex items-start gap-4 shadow-sm ${
-                  result.decision === "approved"
-                    ? "bg-green-50 border-green-200"
-                    : "bg-red-50 border-red-200"
-                }`}
-              >
-                {result.decision === "approved" ? (
-                  <CheckCircle className="text-green-600 shrink-0" size={32} />
-                ) : (
-                  <XCircle className="text-red-600 shrink-0" size={32} />
-                )}
-                <div>
-                  <h2
-                    className={`text-xl font-bold ${
-                      result.decision === "approved"
-                        ? "text-green-800"
-                        : "text-red-800"
-                    }`}
-                  >
-                    {result.decision === "approved"
-                      ? "Rekomendacja: UZNAĆ ZA WYPADEK"
-                      : "Rekomendacja: ODMOWA UZNANIA"}
-                  </h2>
-                  <p className="text-sm mt-1 opacity-80">
-                    Pewność modelu: <strong>{result.confidence}%</strong>
-                  </p>
-                </div>
+          {markdownResult && (
+            <div className="bg-white rounded-2xl shadow-md border border-slate-200 h-[600px] flex flex-col animate-in fade-in slide-in-from-bottom-4 duration-500 overflow-hidden">
+              <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 shrink-0">
+                <span className="text-sm font-semibold text-slate-600 uppercase tracking-wider">
+                  Podsumowanie faktów
+                </span>
+                <button
+                  onClick={copyToClipboard}
+                  className="text-sm text-[#007834] font-medium hover:underline"
+                >
+                  Kopiuj do schowka
+                </button>
               </div>
 
-              {/* Uzasadnienie Punktowe */}
-              <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
-                <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
-                  <div className="w-1.5 h-6 bg-[#007834] rounded-full"></div>
-                  Analiza przesłanek ustawowych
-                </h3>
-                <ul className="space-y-3">
-                  {result.justification.map((point, idx) => (
-                    <li
-                      key={idx}
-                      className="flex items-start gap-3 text-slate-700 text-sm"
-                    >
-                      <CheckCircle
-                        size={16}
-                        className="text-[#007834] mt-0.5 shrink-0"
-                      />
-                      {point}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              {/* Projekt Opinii */}
-              <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 relative">
-                <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
-                  <div className="w-1.5 h-6 bg-blue-600 rounded-full"></div>
-                  Wygenerowany Projekt Opinii
-                </h3>
-                <textarea
-                  readOnly
-                  value={result.draftOpinion}
-                  className="w-full h-64 p-4 bg-slate-50 border border-slate-200 rounded-xl text-sm font-mono text-slate-700 resize-none focus:outline-none"
-                />
-                <div className="mt-4 flex justify-end">
-                  <button className="text-[#007834] font-semibold text-sm hover:underline">
-                    Pobierz jako PDF
-                  </button>
-                </div>
+              <div className="p-8 lg:p-12 overflow-y-scroll h-full [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-slate-100 [&::-webkit-scrollbar-thumb]:bg-slate-300 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-slate-400">
+                <article className="prose prose-slate prose-headings:text-slate-800 prose-p:text-slate-600 prose-strong:text-slate-900 prose-li:text-slate-600 max-w-none">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {markdownResult}
+                  </ReactMarkdown>
+                </article>
               </div>
             </div>
           )}
