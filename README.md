@@ -89,4 +89,4 @@ Projekt jest prototypem z hackathonu – pokazuje, jak można:
 Kolejne kroki mogą obejmować:
 - dopracowanie promptów i reguł walidacji danych,
 - integrację z rzeczywistymi systemami ZUS / PUE,
-- rozbudowę panelu dla pracowników (workflow, wersjonowanie opinii, audyt). !*** End Patch】assistantествоичествоользователь ныхassistant איינגעassistantстройствоassistantுப்assistantំណassistantុំassistant to=functions.apply_patch통령ичество to=functions.apply_patch ***!
+- rozbudowę panelu dla pracowników (workflow, wersjonowanie opinii, audyt).
