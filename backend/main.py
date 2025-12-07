@@ -1071,41 +1071,139 @@ def create_explanation_docx(state: CaseState) -> io.BytesIO:
     file_stream.seek(0)
     return file_stream
 
+def remove_polish_chars(text: str) -> str:
+    """
+    Zamienia polskie znaki i inne znaki specjalne na odpowiedniki ASCII/Latin-1,
+    aby uniknąć błędów FPDF przy braku czcionki Unicode.
+    """
+    replacements = {
+        'ą': 'a', 'ć': 'c', 'ę': 'e', 'ł': 'l', 'ń': 'n', 'ó': 'o', 'ś': 's', 'ź': 'z', 'ż': 'z',
+        'Ą': 'A', 'Ć': 'C', 'Ę': 'E', 'Ł': 'L', 'Ń': 'N', 'Ó': 'O', 'Ś': 'S', 'Ź': 'Z', 'Ż': 'Z',
+        '„': '"', '”': '"', '–': '-', '—': '-', '’': "'", '…': '...'
+    }
+    # 1. Znane zamienniki
+    text = "".join(replacements.get(c, c) for c in text)
+    
+    # 2. Usuń wszystko co nie jest latin-1 (zamień na ?)
+    # FPDF (standard fonts) obsługuje latin-1.
+    return text.encode('latin-1', 'replace').decode('latin-1')
+
 def create_simple_pdf(title: str, content_dict: dict) -> io.BytesIO:
     """
-    Tworzy prosty PDF. 
-    UWAGA: FPDF standardowo nie obsługuje polskich znaków bez wgrania czcionki TTF (np. DejaVuSans).
-    Dla celów hackathonu używamy standardowej czcionki i zamieniamy polskie znaki lub
-    wymagane jest dodanie pliku .ttf do projektu.
-    Tu użyjemy Windows-1250 encoding trick lub prostej transkrypcji, aby kod działał out-of-the-box.
+    Tworzy prosty PDF. Może zajmować wiele stron.
+    Zastosowano bezpieczny layout wertykalny (Etykieta nad Wartością) dla długich pól,
+    aby uniknąć błędów FPDF i wychodzenia poza margines.
     """
     pdf = PDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
     
-    # Dodanie obsługi polskich znaków wymagałoby pliku .ttf, np:
-    # pdf.add_font('DejaVu', '', 'DejaVuSans.ttf', uni=True)
-    # pdf.set_font('DejaVu', '', 12)
+    # Fallback dla standardowego Ariala
+    pdf.set_font("Arial", 'B', 14)
+    pdf.cell(0, 10, remove_polish_chars(title), ln=True, align='C')
+    pdf.ln(5)
+
+    pdf.set_font("Arial", size=11)
     
-    # Fallback dla standardowego Ariala (może krzaczyć polskie znaki)
-    pdf.set_font("Arial", size=12)
-    
-    pdf.cell(0, 10, title, ln=True, align='C')
-    pdf.ln(10)
+    # Efektywna szerokość strony (obszar roboczy)
+    effective_page_width = pdf.w - pdf.l_margin - pdf.r_margin
+
+    placeholder_line = ". " * 65
 
     for key, value in content_dict.items():
-        # Bardzo proste czyszczenie znaków, jeśli nie mamy czcionki UTF-8
-        # W produkcji: użyj reportlab lub załaduj czcionkę TTF w FPDF
-        clean_key = key
-        clean_val = str(value).replace('\u0105', 'a').replace('\u0107', 'c').replace('\u0119', 'e').replace('\u0142', 'l').replace('\u0144', 'n').replace('\u00f3', 'o').replace('\u015b', 's').replace('\u0179', 'Z').replace('\u017b', 'Z')
+        clean_key = remove_polish_chars(str(key))
         
-        pdf.set_font("Arial", 'B', 10)
-        pdf.cell(0, 5, clean_key, ln=True)
-        pdf.set_font("Arial", '', 10)
-        pdf.multi_cell(0, 5, clean_val)
-        pdf.ln(2)
+        # Nagłówki sekcji
+        if key.startswith("---"):
+            pdf.ln(5)
+            pdf.set_font("Arial", 'B', 11)
+            pdf.set_x(pdf.l_margin)
+            pdf.multi_cell(0, 8, clean_key)
+            pdf.set_font("Arial", '', 11)
+            continue
+
+        # Przygotowanie wartości
+        extra_lines = 0
+        placeholder_hint: Optional[str] = None
+        field_value = value
+
+        if isinstance(value, dict):
+            extra_lines = int(value.get("lines") or 0)
+            placeholder_hint = value.get("hint")
+            field_value = value.get("value")
+
+        if field_value and str(field_value).strip():
+            clean_val = remove_polish_chars(str(field_value))
+            if extra_lines:
+                trailing_space = "\n".join(placeholder_line for _ in range(extra_lines))
+                clean_val = f"{clean_val}\n{trailing_space}"
+            is_placeholder = False
+        else:
+            # Placeholder z dodatkowymi liniami na wpisy odręczne
+            total_lines = max(extra_lines, 2 if len(clean_key) > 25 else 1)
+            block = "\n".join(placeholder_line for _ in range(total_lines))
+            if placeholder_hint:
+                clean_val = f"{remove_polish_chars(placeholder_hint)}\n{block}"
+            else:
+                clean_val = block
+            is_placeholder = True
+
+        # Layout
+        pdf.set_font("Arial", 'B', 11)
+        key_str = clean_key + ": "
+        
+        # Sprawdzamy szerokości
+        key_width = pdf.get_string_width(key_str)
+        
+        # Ile miejsca zostanie na linii po wpisaniu klucza?
+        remaining_space = effective_page_width - key_width
+        
+        # Logika decyzji o układzie:
+        # 1. Placeholder -> nowa linia
+        # 2. Wartość długa -> nowa linia
+        # 3. Zostaje za mało miejsca na samej linii po kluczu (< 50mm) -> nowa linia (zapobiega crashom FPDF)
+        
+        force_new_line = (
+            is_placeholder 
+            or len(clean_val) > 60
+            or remaining_space < 50
+        )
+
+        if force_new_line:
+            # Wariant Wertykalny:
+            # Etykieta
+            # Wartość
+            pdf.set_x(pdf.l_margin)
+            pdf.multi_cell(0, 6, key_str)
+            pdf.set_font("Arial", '', 11)
+            pdf.set_x(pdf.l_margin)
+            pdf.multi_cell(0, 6, clean_val)
+        else:
+            # Wariant Horyzontalny:
+            # Etykieta: Wartość
+            try:
+                # Sprawdź czy nie jesteśmy na końcu strony
+                if pdf.get_y() > pdf.h - pdf.b_margin - 10:
+                    pdf.add_page()
+
+                pdf.set_font("Arial", 'B', 11)
+                pdf.set_x(pdf.l_margin)
+                pdf.cell(key_width, 6, key_str, ln=False)
+                
+                pdf.set_font("Arial", '', 11)
+                # multi_cell(0) używa pozostałej szerokości do prawego marginesu
+                pdf.set_x(pdf.get_x())
+                pdf.multi_cell(0, 6, clean_val)
+            except Exception:
+                # Fallback w razie błędu - resetujemy stan i drukujemy wertykalnie
+                pdf.ln()
+                pdf.set_x(pdf.l_margin)
+                pdf.set_font("Arial", 'B', 11)
+                pdf.multi_cell(0, 6, key_str)
+                pdf.set_font("Arial", '', 11)
+                pdf.multi_cell(0, 6, clean_val)
 
     output = io.BytesIO()
-    # output.write(pdf.output(dest='S').encode('latin-1')) # FPDF2 zwraca bytearray
     output.write(pdf.output())
     output.seek(0)
     return output
@@ -1132,20 +1230,79 @@ async def download_documents(case_state: CaseState):
         files_to_zip.append(("wyjasnienia_poszkodowanego.docx", docx_explanation))
 
     # --- PDFy (wersja uproszczona) ---
-    # Przygotowanie danych do zrzutu PDF
+    # Przygotowanie danych do zrzutu PDF zgodnie z widokiem formularza
+    reporter_label = None
+    if case_state.reporter_type == ReporterType.VICTIM:
+        reporter_label = "Poszkodowany"
+    elif case_state.reporter_type == ReporterType.PROXY:
+        reporter_label = "Pełnomocnik"
+
+    proxy_info = None
+    if case_state.proxy_document_attached is True:
+        proxy_info = "Tak"
+    elif case_state.proxy_document_attached is False:
+        proxy_info = "Nie"
+
+    witness_hint = "Imię Nazwisko, Adres (oddzieleni przecinkami)"
+    witness_value = None
+    if case_state.witnesses:
+        witness_rows = []
+        for w in case_state.witnesses:
+            name = f"{w.first_name or ''} {w.last_name or ''}".strip()
+            entry = ", ".join(
+                part for part in [name, w.address or None] if part and part.strip()
+            )
+            if entry:
+                witness_rows.append(entry)
+        witness_value = "\n".join(witness_rows) or None
+
     notification_data = {
-        "Poszkodowany": f"{case_state.first_name} {case_state.last_name}, PESEL: {case_state.pesel}",
-        "Data wypadku": f"{case_state.accident_date} {case_state.accident_time}",
-        "Opis": case_state.accident_description or "",
-        "Miejsce": case_state.accident_place or ""
+        "--- DANE ZGŁASZAJĄCEGO ---": "",
+        "Kto zgłasza wypadek": reporter_label,
+        "Czy załączono pełnomocnictwo": proxy_info,
+
+        "--- DANE POSZKODOWANEGO ---": "",
+        "Imię": case_state.first_name,
+        "Nazwisko": case_state.last_name,
+        "PESEL": case_state.pesel,
+        "Data urodzenia": case_state.date_of_birth,
+        "Adres zamieszkania": case_state.address_home,
+        "Adres do korespondencji": case_state.address_correspondence,
+
+        "--- DANE PŁATNIKA SKŁADEK ---": "",
+        "NIP": case_state.nip,
+        "REGON": case_state.regon,
+        "Adres siedziby": case_state.business_address,
+        "Kod PKD": case_state.pkd,
+        "Opis działalności": {"value": case_state.business_description, "lines": 2},
+
+        "--- INFORMACJE O WYPADKU ---": "",
+        "Data wypadku": case_state.accident_date,
+        "Godzina wypadku": case_state.accident_time,
+        "Miejsce wypadku": {"value": case_state.accident_place, "lines": 2},
+        "Rodzaj urazu": case_state.injury_type,
+        "Opis zdarzenia": {"value": case_state.accident_description, "lines": 5},
+        "Udzielona pierwsza pomoc": {"value": case_state.first_aid_info, "lines": 3},
+        "Postępowanie powypadkowe": {"value": case_state.proceedings_info, "lines": 3},
+        "Maszyny i urządzenia": {"value": case_state.equipment_info, "lines": 3},
+
+        "--- CZAS PRACY ---": "",
+        "Planowane rozpoczęcie pracy": case_state.planned_work_start,
+        "Planowane zakończenie pracy": case_state.planned_work_end,
+
+        "--- ŚWIADKOWIE ---": "",
+        "Dane świadków": {"value": witness_value, "lines": 4, "hint": witness_hint},
     }
+
     pdf_notification = create_simple_pdf("Zawiadomienie (Draft PDF)", notification_data)
     files_to_zip.append(("zawiadomienie_o_wypadku.pdf", pdf_notification))
 
     if case_state.accident_description:
         explanation_data = {
-            "Imie i nazwisko": f"{case_state.first_name} {case_state.last_name}",
-            "Tresc wyjasnien": case_state.accident_description
+            "--- WYJAŚNIENIA POSZKODOWANEGO ---": "",
+            "Imię i nazwisko": f"{case_state.first_name or ''} {case_state.last_name or ''}".strip() or None,
+            "Treść wyjaśnień": {"value": case_state.accident_description, "lines": 6},
+            "Informacje dodatkowe (BHP/maszyny)": {"value": case_state.equipment_info, "lines": 3},
         }
         pdf_explanation = create_simple_pdf("Wyjasnienia (Draft PDF)", explanation_data)
         files_to_zip.append(("wyjasnienia.pdf", pdf_explanation))
