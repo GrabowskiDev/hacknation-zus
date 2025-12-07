@@ -1,7 +1,15 @@
-import React, { createContext, useContext, useState, useEffect } from "react";
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useMemo,
+} from "react";
 import type { ReactNode } from "react";
 import type { CaseState, ChatTurn, AssistantResponse } from "../types";
 import { v4 as uuidv4 } from "uuid";
+
+import pkdList from "@/../data/pkd.json";
 
 // Klucze do localStorage
 const STORAGE_KEYS = {
@@ -18,6 +26,7 @@ interface ChatContextType {
   sendMessage: (text: string) => Promise<void>;
   missingFields: string[];
   clearSession: () => void; // Opcjonalnie: funkcja do resetu
+  updatePkd: (code: string) => void;
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
@@ -76,6 +85,35 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.CASE_STATE, JSON.stringify(caseState));
   }, [caseState]);
+
+  // --- PKD ---
+  const pkdMap = useMemo(() => {
+    const map = new Map<string, string>();
+    pkdList.forEach((item) => {
+      // Kluczem jest "czysty" kod (bez kropek, spacji), np. "0111Z"
+      const cleanKey = item.code.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+      map.set(cleanKey, item.desc);
+    });
+    return map;
+  }, []);
+
+  const updatePkd = (inputCode: string) => {
+    // 1. Normalizujemy to co wpisał użytkownik (usuwamy kropki, spacje, wielkie litery)
+    const normalizedInput = inputCode
+      .replace(/[^a-zA-Z0-9]/g, "")
+      .toUpperCase();
+
+    // 2. Szukamy opisu
+    const description = pkdMap.get(normalizedInput) || "";
+
+    // 3. Aktualizujemy stan (zapisujemy zarówno kod wpisany, jak i znaleziony opis)
+    // Zakładam, że w CaseState masz pola 'pkdCode' i 'pkdDescription'
+    setCaseState((prev) => ({
+      ...prev,
+      pkd: inputCode, // Zapisujemy to co wpisuje user (dla input value)
+      business_description: description, // Automatycznie wypełniamy opis
+    }));
+  };
 
   // --- LOGIKA BIZNESOWA ---
 
@@ -144,6 +182,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
         sendMessage,
         missingFields,
         clearSession,
+        updatePkd,
       }}
     >
       {children}
