@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { ChangeEvent } from "react";
+
 // Definicja typu odpowiedzi z backendu
 interface BackendResponse {
   summary: string;
@@ -12,13 +13,28 @@ export const useAccidentAnalysis = () => {
   const [markdownResult, setMarkdownResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Obsługa wyboru plików
+  // Obsługa wyboru plików (DODAWANIE zamiast nadpisywania)
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      setFiles(Array.from(e.target.files));
+    if (e.target.files && e.target.files.length > 0) {
+      const newFiles = Array.from(e.target.files);
+
+      // Dodajemy nowe pliki do istniejących
+      setFiles((prevFiles) => [...prevFiles, ...newFiles]);
+
+      // Resetujemy wyniki przy zmianie plików
       setMarkdownResult(null);
       setError(null);
+
+      // Resetujemy input, aby można było wybrać ten sam plik ponownie po usunięciu
+      e.target.value = "";
     }
+  };
+
+  // Nowa funkcja do usuwania pojedynczego pliku
+  const removeFile = (indexToRemove: number) => {
+    setFiles((prevFiles) =>
+      prevFiles.filter((_, index) => index !== indexToRemove)
+    );
   };
 
   // Logika wysyłki i analizy
@@ -56,11 +72,10 @@ export const useAccidentAnalysis = () => {
     }
   };
 
-  // Dodatkowa pomocnicza funkcja do kopiowania tekstu (opcjonalnie)
+  // Dodatkowa pomocnicza funkcja do kopiowania tekstu
   const copyToClipboard = () => {
     if (markdownResult) {
       navigator.clipboard.writeText(markdownResult);
-      // Tu można dodać np. toast z powiadomieniem
     }
   };
 
@@ -70,6 +85,7 @@ export const useAccidentAnalysis = () => {
     markdownResult,
     error,
     handleFileChange,
+    removeFile, // Eksportujemy nową funkcję
     handleAnalyze,
     copyToClipboard,
   };

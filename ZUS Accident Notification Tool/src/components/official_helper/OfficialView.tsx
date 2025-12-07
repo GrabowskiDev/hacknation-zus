@@ -1,20 +1,15 @@
-import React, { useState } from "react";
+import React from "react";
 import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm"; // Obsługa tabel, przekreśleń itp.
+import remarkGfm from "remark-gfm";
 import {
   Upload,
   FileText,
   Loader2,
   AlertCircle,
   FileOutput,
+  Trash2, // Import ikonki kosza
 } from "lucide-react";
 import { useAccidentAnalysis } from "@/hooks/useAccidentAnalysis";
-
-// Teraz BackendResponse zwraca string w polu summary
-interface BackendResponse {
-  summary: string;
-  file_count: number;
-}
 
 function OfficialView() {
   const {
@@ -23,6 +18,7 @@ function OfficialView() {
     markdownResult,
     error,
     handleFileChange,
+    removeFile, // Pobieramy funkcję usuwania
     handleAnalyze,
     copyToClipboard,
   } = useAccidentAnalysis();
@@ -61,26 +57,47 @@ function OfficialView() {
               <span className="font-semibold text-slate-700">
                 Wgraj pliki PDF
               </span>
+              <span className="text-xs text-slate-400 mt-2">
+                Kliknij, aby dodać kolejne
+              </span>
             </label>
           </div>
 
           {files.length > 0 && (
             <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-              <div className="p-4 bg-slate-50 border-b border-slate-100 font-semibold text-sm text-slate-700">
-                Dokumentacja ({files.length})
+              <div className="p-4 bg-slate-50 border-b border-slate-100 font-semibold text-sm text-slate-700 flex justify-between items-center">
+                <span>Dokumentacja ({files.length})</span>
               </div>
-              <ul className="divide-y divide-slate-100 max-h-40 overflow-y-auto">
+
+              {/* Lista plików */}
+              <ul className="divide-y divide-slate-100 max-h-60 overflow-y-auto custom-scrollbar">
                 {files.map((file, idx) => (
                   <li
-                    key={idx}
-                    className="p-3 flex items-center gap-3 text-sm text-slate-600"
+                    key={`${file.name}-${idx}`}
+                    className="p-3 flex items-center justify-between gap-3 text-sm text-slate-600 group hover:bg-slate-50 transition-colors"
                   >
-                    <FileText size={16} className="text-[#007834]" />
-                    <span className="truncate">{file.name}</span>
+                    <div className="flex items-center gap-3 overflow-hidden">
+                      <FileText size={16} className="text-[#007834] shrink-0" />
+                      <span className="truncate" title={file.name}>
+                        {file.name}
+                      </span>
+                    </div>
+
+                    {/* Przycisk usuwania */}
+                    {!isAnalyzing && (
+                      <button
+                        onClick={() => removeFile(idx)}
+                        className="text-slate-400 hover:text-red-600 hover:bg-red-50 p-1.5 rounded-md transition-all"
+                        title="Usuń plik"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>
-              <div className="p-4">
+
+              <div className="p-4 border-t border-slate-50">
                 <button
                   onClick={handleAnalyze}
                   disabled={isAnalyzing}
@@ -88,9 +105,8 @@ function OfficialView() {
                 >
                   {isAnalyzing ? (
                     <>
-                      {" "}
-                      <Loader2 className="animate-spin" size={18} />{" "}
-                      Przetwarzam...{" "}
+                      <Loader2 className="animate-spin" size={18} />
+                      Przetwarzam...
                     </>
                   ) : (
                     "Generuj Raport"
@@ -101,7 +117,8 @@ function OfficialView() {
           )}
 
           {error && (
-            <div className="p-4 bg-red-50 text-red-700 rounded-xl text-sm border border-red-200">
+            <div className="p-4 bg-red-50 text-red-700 rounded-xl text-sm border border-red-200 flex items-start gap-2">
+              <AlertCircle size={18} className="shrink-0 mt-0.5" />
               {error}
             </div>
           )}
@@ -126,19 +143,20 @@ function OfficialView() {
           )}
 
           {markdownResult && (
-            <div className="bg-white rounded-2xl shadow-md border border-slate-200 min-h-[600px] flex flex-col animate-in fade-in slide-in-from-bottom-4 pb-4 h-128 duration-500">
-              {/* Pasek narzędzi dokumentu */}
-              <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 rounded-t-2xl">
+            <div className="bg-white rounded-2xl shadow-md border border-slate-200 h-[600px] flex flex-col animate-in fade-in slide-in-from-bottom-4 duration-500 overflow-hidden">
+              <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 shrink-0">
                 <span className="text-sm font-semibold text-slate-600 uppercase tracking-wider">
                   Podsumowanie faktów
                 </span>
-                <button className="text-sm text-[#007834] font-medium hover:underline">
+                <button
+                  onClick={copyToClipboard}
+                  className="text-sm text-[#007834] font-medium hover:underline"
+                >
                   Kopiuj do schowka
                 </button>
               </div>
 
-              {/* OBSZAR RENDERINGU MARKDOWN */}
-              <div className="p-8 lg:p-12 overflow-scroll">
+              <div className="p-8 lg:p-12 overflow-y-scroll h-full [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-slate-100 [&::-webkit-scrollbar-thumb]:bg-slate-300 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-slate-400">
                 <article className="prose prose-slate prose-headings:text-slate-800 prose-p:text-slate-600 prose-strong:text-slate-900 prose-li:text-slate-600 max-w-none">
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>
                     {markdownResult}
