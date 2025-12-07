@@ -176,3 +176,85 @@ def summarize_accident_facts_from_pdfs(pdf_files: List[bytes]) -> str:
             "facts_docs": joined_text,
         }
     )
+
+
+def build_filled_card_text_from_summary(summary_text: str) -> str:
+    """
+    Wczytuje fragmenty wzoru karty z plików tekstowych w katalogu głównym
+    (poczatek.txt, pytanie1.txt, srodek.txt, pytanie2.txt, pytanie3.txt,
+    pytanie4.txt, koniec.txt), przekazuje je wraz ze streszczeniem faktów
+    do LLM i prosi o uzupełnienie TYLKO kropek tam, gdzie odpowiedź
+    jednoznacznie wynika z summary.
+
+    Zwraca jeden sklejony tekst:
+    poczatek + pytanie1 + srodek + pytanie2 + pytanie3 + pytanie4 + koniec
+    po uzupełnieniu.
+    """
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    parts = []
+    filenames = [
+        "poczatek.txt",
+        "pytanie1.txt",
+        "srodek.txt",
+        "pytanie2.txt",
+        "pytanie3.txt",
+        "pytanie4.txt",
+        "koniec.txt",
+    ]
+
+    for name in filenames:
+        path = os.path.join(project_root, name)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                parts.append(f.read())
+        except Exception:
+            # Jeśli któregoś pliku brakuje, traktujemy go jak pusty fragment.
+            parts.append("")
+
+    template_text = "\n".join(parts)
+
+    llm = _get_llm()
+    if llm is None or not summary_text.strip():
+        # Bez LLM – zwracamy sam szablon, nic nie zmieniamy.
+        return template_text
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                (
+                    "Masz zestaw fragmentów tekstowego wzoru karty wypadku, "
+                    "sklejony w jeden ciąg, oraz streszczenie faktów wypadku.\n"
+                    "Twoje zadanie:\n"
+                    "- uzupełnij TYLKO te miejsca z kropkami (ciągi typu '.....'), "
+                    "dla których odpowiedź jednoznacznie wynika ze streszczenia faktów,\n"
+                    "- ZACHOWAJ treść pytań i reszty tekstu bez zmian (nie usuwaj nagłówków, numeracji, objaśnień),\n"
+                    "- tam, gdzie nie da się nic dopowiedzieć na podstawie streszczenia, "
+                    "pozostaw kropki dokładnie tak jak są,\n"
+                    "- odpowiedz WYŁĄCZNIE gotowym tekstem karty po uzupełnieniu, bez komentarzy ani metadanych."
+                ),
+            ),
+            (
+                "human",
+                (
+                    "Streszczenie faktów wypadku:\n{summary}\n\n"
+                    "Sklejony tekst z plików (poczatek/pytania/srodek/koniec):\n{template}\n\n"
+                    "Zwróć kompletny tekst po uzupełnieniu możliwych pól."
+                ),
+            ),
+        ]
+    )
+
+    chain = prompt | llm | StrOutputParser()
+    try:
+        filled_text = chain.invoke(
+            {
+                "summary": summary_text,
+                "template": template_text,
+            }
+        )
+    except Exception:
+        # W razie problemów z LLM – oddaj niezmieniony szablon.
+        return template_text
+
+    return filled_text

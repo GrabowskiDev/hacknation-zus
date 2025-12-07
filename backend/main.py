@@ -20,7 +20,11 @@ from docx import Document as DocxDocument
 from docx.shared import Pt
 from fpdf import FPDF
 
-from ocr import extract_text_from_image, summarize_accident_facts_from_pdfs
+from ocr import (
+    extract_text_from_image,
+    summarize_accident_facts_from_pdfs,
+    build_filled_card_text_from_summary,
+)
 
 
 load_dotenv()  # load GOOGLE_API_KEY and friends from .env
@@ -1348,6 +1352,7 @@ async def summarize_accident_facts(files: List[UploadFile] = File(...)) -> dict:
 
     try:
         summary = summarize_accident_facts_from_pdfs(contents_list)
+        filled_card_text = build_filled_card_text_from_summary(summary)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # pragma: no cover - defensive
@@ -1356,4 +1361,5 @@ async def summarize_accident_facts(files: List[UploadFile] = File(...)) -> dict:
     return {
         "summary": summary,
         "file_count": len(contents_list),
+        "accident_card_filled_text": filled_card_text,
     }
