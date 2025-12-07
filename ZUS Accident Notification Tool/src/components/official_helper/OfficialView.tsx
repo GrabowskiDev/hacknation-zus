@@ -21,6 +21,8 @@ function OfficialView() {
     removeFile, // Pobieramy funkcję usuwania
     handleAnalyze,
     copyToClipboard,
+    hasPdf,
+    downloadPdf,
   } = useAccidentAnalysis();
 
   return (
@@ -143,27 +145,37 @@ function OfficialView() {
           )}
 
           {markdownResult && (
-            <div className="bg-white rounded-2xl shadow-md border border-slate-200 h-[600px] flex flex-col animate-in fade-in slide-in-from-bottom-4 duration-500 overflow-hidden">
-              <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 shrink-0">
-                <span className="text-sm font-semibold text-slate-600 uppercase tracking-wider">
-                  Podsumowanie faktów
-                </span>
-                <button
-                  onClick={copyToClipboard}
-                  className="text-sm text-[#007834] font-medium hover:underline"
-                >
-                  Kopiuj do schowka
-                </button>
-              </div>
+            <>
+              <div className="bg-white rounded-2xl shadow-md border border-slate-200 h-[600px] flex flex-col animate-in fade-in slide-in-from-bottom-4 duration-500 overflow-hidden">
+                <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 shrink-0">
+                  <span className="text-sm font-semibold text-slate-600 uppercase tracking-wider">
+                    Podsumowanie faktów
+                  </span>
+                  <button
+                    onClick={copyToClipboard}
+                    className="text-sm text-[#007834] font-medium hover:underline"
+                  >
+                    Kopiuj do schowka
+                  </button>
+                </div>
 
-              <div className="p-8 lg:p-12 overflow-y-scroll h-full [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-slate-100 [&::-webkit-scrollbar-thumb]:bg-slate-300 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-slate-400">
-                <article className="prose prose-slate prose-headings:text-slate-800 prose-p:text-slate-600 prose-strong:text-slate-900 prose-li:text-slate-600 max-w-none">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {markdownResult}
-                  </ReactMarkdown>
-                </article>
+                <div className="p-8 lg:p-12 overflow-y-scroll h-full [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-slate-100 [&::-webkit-scrollbar-thumb]:bg-slate-300 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-slate-400">
+                  <article className="prose prose-slate prose-headings:text-slate-800 prose-p:text-slate-600 prose-strong:text-slate-900 prose-li:text-slate-600 max-w-none">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {markdownResult}
+                    </ReactMarkdown>
+                  </article>
+                </div>
               </div>
-            </div>
+              {hasPdf && (
+                <button
+                  onClick={downloadPdf}
+                  className="mt-4 bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700"
+                >
+                  Pobierz Kartę Wypadku (PDF)
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>
