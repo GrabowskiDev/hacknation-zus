@@ -66,11 +66,18 @@ export interface MissingField {
   reason: string;
 }
 
+export interface ActionStep {
+  step_number: number;
+  description: string;
+  required_documents: string[];
+}
+
 // Odpowiedź z Twojego API
 export interface AssistantResponse {
   assistant_reply: string;
   missing_fields: MissingField[];
   case_state_preview: CaseState;
+  recommended_actions?: ActionStep[];
 }
 
 export interface FormFieldOption {

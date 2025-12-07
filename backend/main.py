@@ -1,24 +1,26 @@
 from __future__ import annotations
 
+import base64
+import json
 import os
+from datetime import date
 from enum import Enum
 from typing import Any, List, Optional
-from datetime import date
 from unittest import result
-from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.output_parsers import PydanticOutputParser, StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
 
 import io
 import zipfile
-from fastapi.responses import StreamingResponse
 from docx import Document as DocxDocument
 from docx.shared import Pt
+from dotenv import load_dotenv
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fpdf import FPDF
+from langchain_core.output_parsers import PydanticOutputParser, StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_google_genai import ChatGoogleGenerativeAI
+from pydantic import BaseModel, Field
 
 from ocr import (
     extract_text_from_image,
@@ -28,6 +30,42 @@ from ocr import (
 
 
 load_dotenv()  # load GOOGLE_API_KEY and friends from .env
+
+ACTION_PLAN_GUIDE = """Źródło: \"ZUS Accident Notification Tool\" (wytyczne dotyczące finalnych kroków po złożeniu zawiadomienia o wypadku).
+
+1. Najpilniejsze działania po wypadku
+- Zgłoś zdarzenie do Zakładu Ubezpieczeń Społecznych (PUE ZUS lub w oddziale) i zarejestruj sprawę.
+- Zapewnij pełną dokumentację medyczną: zaświadczenia OL-9/N-9, karty wypisowe ze szpitala, zalecenia lekarza.
+- Zbierz zeznania świadków oraz zdjęcia/notatki potwierdzające okoliczności wypadku.
+
+2. Wymagane formularze i dokumenty według profilu zgłaszającego
+Przedsiębiorca / osoba samozatrudniona:
+- Zawiadomienie o wypadku (generowane w systemie) oraz druk ZUS Z-3b.
+- Szczegółowa karta wypadku opisująca przebieg i przyczyny.
+- Zaświadczenia medyczne OL-9 lub N-9 oraz dowód niezdolności do pracy.
+- Potwierdzenie opłacania składek i podstawowe identyfikatory działalności (NIP, REGON, PKD).
+
+Pracownik / zleceniobiorca:
+- Niezwłoczne zgłoszenie wypadku pracodawcy i udział w sporządzeniu protokołu powypadkowego lub karty wypadku.
+- Pracodawca wystawia druk ZUS Z-3 (pracownik) lub ZUS Z-3a (zleceniobiorca). Poszkodowany składa ZUS Z-15 przy wniosku o zasiłek.
+- Jeśli interweniowały służby, dołącz notatki policji lub pogotowia.
+
+Wypadek w drodze do lub z pracy:
+- Wypełnij z pracodawcą lub przedstawicielem ZUS kartę wypadku w drodze.
+- Dostarcz dowody potwierdzające trasę i cel podróży (bilety, logi GPS, zeznania świadków).
+
+3. Przebieg po złożeniu zawiadomienia
+Krok 1: Dokończ i podpisz dokumentację (zawiadomienie, wyjaśnienia, lista świadków, karta wypadku). Sprawdź spójność godzin pracy i momentu wypadku.
+Krok 2: Złóż komplet dokumentów w ZUS i zachowaj potwierdzenie nadania. Kopie przechowuj w aktach sprawy.
+Krok 3: Monitoruj status w PUE ZUS i reaguj na prośby o uzupełnienia. Dostarczaj dodatkowe zaświadczenia medyczne bez zwłoki.
+Krok 4: Po decyzji ZUS sprawdź należne świadczenia (zasiłek chorobowy, świadczenie rehabilitacyjne, odszkodowanie). W razie potrzeby złóż odwołanie w ustawowym terminie.
+
+4. Dodatkowe wskazówki z PDF
+- Przy każdym kroku wypisz wymagane załączniki, by uniknąć ponownych wizyt w ZUS.
+- Dbaj o zgodność treści między opisem zdarzenia, zeznaniami świadków i dokumentacją medyczną.
+- Przypomnij poszkodowanemu o konieczności przechowywania dowodów opłaconych składek oraz instruktażu BHP otrzymanego przed wypadkiem.
+- Przygotuj checklistę formularzy: zawiadomienie, ZUS Z-3/Z-3b/Z-3a, ZUS Z-15, karta wypadku, OL-9/N-9, wypisy medyczne, zeznania świadków, zdjęcia, potwierdzenie zabezpieczenia miejsca wypadku.
+"""
 
 
 class Mode(str, Enum):
@@ -109,10 +147,21 @@ class AssistantMessageRequest(BaseModel):
     )
 
 
+class ActionStep(BaseModel):
+    step_number: int = Field(..., description="Numer kolejny kroku")
+    description: str = Field(..., description="Opis czynności do wykonania")
+    required_documents: List[str] = Field(default_factory=list, description="Lista wymaganych dokumentów dla tego kroku")
+
+
+class ActionPlan(BaseModel):
+    actions: List[ActionStep] = Field(default_factory=list, description="Lista kroków do wykonania")
+
+
 class AssistantMessageResponse(BaseModel):
     assistant_reply: str
     missing_fields: List[MissingField]
     case_state_preview: CaseState
+    recommended_actions: Optional[List[ActionStep]] = None
 
 
 class CaseDocument(BaseModel):
@@ -220,6 +269,7 @@ app.add_middleware(
     allow_origins=["*"],  # na potrzeby hackathonu puszczamy wszystko
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-ZANT-Actions"],
 )
 
 
@@ -553,6 +603,7 @@ def extract_case_state_with_llm(
             }
         )
 
+
     parser = PydanticOutputParser(pydantic_object=CaseState)
 
     history_text = "\n".join(
@@ -608,12 +659,82 @@ def extract_case_state_with_llm(
         return updated_state
     except Exception as e:
         # Fallback: tylko podmień opis wypadku na podstawie wiadomości
+        print(f"BŁĄD LLM: {e}") 
+
         return previous_state.model_copy(
             update={
                 "accident_description": message.strip()
                 or previous_state.accident_description
             }
         )
+def generate_post_accident_actions(case_state: CaseState) -> List[ActionStep]:
+    """
+    Generuje spersonalizowaną listę kroków i dokumentów na podstawie zebranych danych.
+    """
+    llm = get_llm()
+    if llm is None:
+        return []
+
+    guide_excerpt = ACTION_PLAN_GUIDE
+
+    # Używamy PydanticOutputParser z wrapperem ActionPlan, aby uzyskać poprawną strukturę listy.
+    parser = PydanticOutputParser(pydantic_object=ActionPlan)
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                (
+                    "Jesteś ekspertem ZUS i wirtualnym doradcą w systemie ZANT (ZUS Accident Notification Tool). "
+                    "Twoim zadaniem jest wygenerowanie spersonalizowanej listy czynności (Action Plan) dla użytkownika, "
+                    "który zgłasza wypadek.\n\n"
+                    "ŹRÓDŁO REFERENCYJNE (fragment PDF 'ZUS Accident Notification Tool'):\n"
+                    "{guide_excerpt}\n\n"
+                    "ANALIZA SYTUACJI (na podstawie CaseState):\n"
+                    "1. Sprawdź, czy poszkodowany jest Przedsiębiorcą (wypełnione NIP, REGON, business_description) czy Pracownikiem.\n"
+                    "2. Sprawdź rodzaj wypadku (przy pracy, w drodze, inny).\n\n"
+                    "ZASADY GENEROWANIA KROKÓW (zgodnie z wytycznymi ZUS):\n"
+                    "- Jeśli to PRZEDSIĘBIORCA (Wypadek przy pracy):\n"
+                    "  1. Zgłoszenie wypadku w placówce ZUS (pisemnie lub przez PUE).\n"
+                    "  2. Złożenie wniosku o ustalenie okoliczności wypadku (Karta Wypadku).\n"
+                    "  3. Skompletowanie dokumentacji medycznej (zaświadczenie OL-9 lub N-9).\n"
+                    "  4. Wypełnienie druku ZUS Z-3b (zaświadczenie płatnika składek).\n"
+                    "- Jeśli to PRACOWNIK:\n"
+                    "  1. Zgłoszenie wypadku pracodawcy (niezwłocznie).\n"
+                    "  2. Udział w sporządzeniu Protokołu Powypadkowego (przez zespół powypadkowy).\n"
+                    "  3. Przekazanie pracodawcy druku ZUS Z-15 (wniosek o zasiłek) i ZUS Z-3 (wypełnia pracodawca).\n"
+                    "- Jeśli WYPADEK W DRODZE DO PRACY:\n"
+                    "  1. Zgłoszenie pracodawcy/zleceniodawcy.\n"
+                    "  2. Karta wypadku w drodze do pracy.\n\n"
+                    "WYMAGANIA DLA ODPOWIEDZI:\n"
+                    "- Zwróć obiekt JSON zgodny ze schematem ActionPlan (zawierający listę 'actions').\n"
+                    "- Pola kroku: 'step_number' (int), 'description' (str), 'required_documents' (list[str]).\n"
+                    "- Bądź precyzyjny i pomocny. Używaj oficjalnych nazw druków ZUS.\n\n"
+                    "{format_instructions}"
+                ),
+            ),
+            (
+                "human",
+                (
+                    "Dane CaseState (JSON):\n{case_state}\n\n"
+                    "Na podstawie powyższych danych przygotuj ActionPlan (lista 'actions')."
+                ),
+            ),
+        ]
+    )
+
+    chain = prompt | llm | parser
+
+    try:
+        result: ActionPlan = chain.invoke({
+            "case_state": case_state.model_dump_json(),
+            "format_instructions": parser.get_format_instructions(),
+            "guide_excerpt": guide_excerpt,
+        })
+        return result.actions
+    except Exception as e:
+        print(f"Błąd generowania zaleceń: {e}")
+        return []
 
 
 def run_assistant_pipeline(
@@ -795,9 +916,27 @@ def run_assistant_pipeline(
                 label = human_field_label(next_field)
                 assistant_reply = f"{label}:"
     else:
+        # To jest moment, w którym generujemy raport końcowy i zalecenia
+        
+        # Wywołaj LLM z promptem:
+        # "Na podstawie zgromadzonych danych (CaseState):
+        # 1. Czy to był wypadek w drodze, czy przy pracy?
+        # 2. Jakie dokumenty są wymagane dla tego konkretnego przypadku?
+        # 3. Jakie kroki musi podjąć użytkownik?
+        # Zwróć listę ActionStep."
+        
+        actions = generate_post_accident_actions(case_state) # Nowa funkcja z LLM
+        
         assistant_reply = (
             "Dziękuję, to wszystkie pytania o dane wymagane w formularzu. "
-            "Jeśli chcesz coś doprecyzować lub dodać, napisz to w kolejnej wiadomości."
+            "Poniżej znajdziesz listę kroków, które powinieneś teraz podjąć."
+        )
+
+        return AssistantMessageResponse(
+            assistant_reply=assistant_reply,
+            missing_fields=missing,
+            case_state_preview=case_state,
+            recommended_actions=actions
         )
 
     return AssistantMessageResponse(
@@ -1222,6 +1361,7 @@ async def download_documents(case_state: CaseState):
     
     # 1. Przygotuj bufory plików
     files_to_zip = []
+    actions = generate_post_accident_actions(case_state)
 
     # --- Zawiadomienie DOCX ---
     docx_notification = create_notification_docx(case_state)
@@ -1324,10 +1464,17 @@ async def download_documents(case_state: CaseState):
 
     # 3. Zwróć jako streaming response
     filename = f"dokumenty_wypadkowe_{case_state.last_name or 'nieznany'}.zip"
+    headers = {"Content-Disposition": f"attachment; filename={filename}"}
+    serialized = json.dumps(
+        [action.model_dump() for action in actions],
+        ensure_ascii=False,
+    )
+    headers["X-ZANT-Actions"] = base64.b64encode(serialized.encode("utf-8")).decode("ascii")
+
     return StreamingResponse(
         zip_buffer,
         media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
+        headers=headers,
     )
 
 @app.post("/api/ocr/summarize-accident-facts")
