@@ -2,10 +2,58 @@ import { useState } from "react";
 import FormSection from "@/components/form/FormSection";
 import { formConfig } from "@/config/formConfig";
 import { useFormSync } from "@/hooks/useFormSync";
+import { useChat } from "@/context/ChatContext";
+import type { ActionStep } from "@/types";
+
+const formatActionsForChat = (actions: ActionStep[]): string => {
+  if (!actions.length) {
+    return "Nie znaleziono dodatkowych kroków do wykonania po zgłoszeniu.";
+  }
+
+  const sorted = [...actions].sort(
+    (a, b) => (a.step_number ?? 0) - (b.step_number ?? 0)
+  );
+
+  const items = sorted
+    .map((action) => {
+      const docs = Array.isArray(action.required_documents)
+        ? action.required_documents.filter(Boolean)
+        : [];
+
+      const maxDocs = 3;
+      const displayedDocs = docs.slice(0, maxDocs);
+      const hiddenCount = Math.max(docs.length - displayedDocs.length, 0);
+      const docsLabel = displayedDocs.length
+        ? `${displayedDocs.join(", ")}${hiddenCount ? ` (+${hiddenCount} dok.)` : ""}`
+        : "brak dodatkowych wymagań";
+
+      return [
+        `• Krok ${action.step_number}: ${action.description}`,
+        `   Dokumenty: ${docsLabel}`,
+      ].join("\n");
+    })
+    .join("\n\n");
+
+  return `Plan działania po zgłoszeniu:\n\n${items}`;
+};
+
+const decodeActionsHeader = (header: string): ActionStep[] => {
+  try {
+    const binary = atob(header);
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+    const text = new TextDecoder("utf-8").decode(bytes);
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed) ? (parsed as ActionStep[]) : [];
+  } catch (error) {
+    console.error("Nie udało się zdekodować nagłówka X-ZANT-Actions:", error);
+    return [];
+  }
+};
 
 function FormView() {
   const { localState, handleFieldChange, handleFieldBlur } =
     useFormSync(formConfig);
+  const { appendAssistantMessage } = useChat();
 
   // Stan do obsługi blokady przycisku podczas generowania
   const [isDownloading, setIsDownloading] = useState(false);
@@ -61,6 +109,11 @@ function FormView() {
         throw new Error("Błąd walidacji danych (422)");
       }
 
+      const actionsHeader = response.headers.get("X-ZANT-Actions");
+      const stepsFromBackend = actionsHeader
+        ? decodeActionsHeader(actionsHeader)
+        : [];
+
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement("a");
@@ -71,6 +124,10 @@ function FormView() {
 
       link.remove();
       window.URL.revokeObjectURL(url);
+
+      if (stepsFromBackend.length) {
+        appendAssistantMessage(formatActionsForChat(stepsFromBackend));
+      }
     } catch (error) {
       console.error("Download error:", error);
       alert("Wystąpił błąd podczas generowania. Sprawdź konsolę.");

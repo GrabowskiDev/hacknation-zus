@@ -17,6 +17,7 @@ interface ChatContextType {
   isLoading: boolean;
   sendMessage: (text: string) => Promise<void>;
   missingFields: string[];
+  appendAssistantMessage: (text: string) => void;
   clearSession: () => void; // Opcjonalnie: funkcja do resetu
 }
 
@@ -134,6 +135,10 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     window.location.reload(); // Najprostszy sposób na reset stanu
   };
 
+  const appendAssistantMessage = (text: string) => {
+    setMessages((prev) => [...prev, { role: "assistant", content: text }]);
+  };
+
   return (
     <ChatContext.Provider
       value={{
@@ -143,6 +148,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
         isLoading,
         sendMessage,
         missingFields,
+        appendAssistantMessage,
         clearSession,
       }}
     >
