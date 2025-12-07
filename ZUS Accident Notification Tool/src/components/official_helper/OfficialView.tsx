@@ -1,4 +1,3 @@
-import React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -170,7 +169,7 @@ function OfficialView() {
               {hasPdf && (
                 <button
                   onClick={downloadPdf}
-                  className="mt-4 bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700"
+                  className="mt-4 bg-[#007834] text-white px-4 py-2 rounded-lg hover:bg-[#005f2a]"
                 >
                   Pobierz Kartę Wypadku (PDF)
                 </button>
