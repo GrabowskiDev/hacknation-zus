@@ -22,6 +22,10 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
 
+import re
+from pypdf import PdfReader, PdfWriter
+from pypdf.generic import NameObject, BooleanObject, TextStringObject, DictionaryObject, ArrayObject
+
 from ocr import (
     extract_text_from_image,
     summarize_accident_facts_from_pdfs,
@@ -1352,29 +1356,282 @@ def create_simple_pdf(title: str, content_dict: dict) -> io.BytesIO:
     return output
 
 
+# Dodatkowe wypełniajace EWYP
+def parse_address_to_dict(address_str: Optional[str]) -> dict:
+    """
+    Rozbija string adresu (np. 'ul. Długa 5/10, 00-123 Warszawa') na części:
+    ulica, nr_domu, nr_lokalu, kod, poczta.
+    Działa na zasadzie heurystyki (best-effort).
+    """
+    result = {
+        "ulica": "",
+        "nr_domu": "",
+        "nr_lokalu": "",
+        "kod": "",
+        "poczta": ""
+    }
+    
+    if not address_str:
+        return result
+
+    # 1. Wyciągamy kod pocztowy (XX-XXX)
+    zip_match = re.search(r'(\d{2}-\d{3})', address_str)
+    if zip_match:
+        result["kod"] = zip_match.group(1)
+        # Poczta to zazwyczaj to, co jest po kodzie pocztowym
+        parts = address_str.split(result["kod"])
+        if len(parts) > 1:
+            result["poczta"] = parts[1].strip(" ,.")
+        
+        # Reszta (przed kodem) to ulica i numer
+        street_part = parts[0].strip(" ,.")
+    else:
+        street_part = address_str
+
+    # 2. Próbujemy oddzielić numer domu i lokalu od ulicy
+    # Szukamy cyfry na końcu ciągu
+    # Wzorce: "Długa 5", "Długa 5/10", "Długa 5 m. 10"
+    match_nr = re.search(r'(\d+[a-zA-Z]?\/?\s?\d*)$', street_part)
+    if match_nr:
+        numer_full = match_nr.group(1)
+        # Ulica to wszystko przed numerem
+        result["ulica"] = street_part[:match_nr.start()].strip()
+        
+        # Rozbicie na dom i lokal
+        if '/' in numer_full:
+            d, l = numer_full.split('/', 1)
+            result["nr_domu"] = d.strip()
+            result["nr_lokalu"] = l.strip()
+        elif 'm.' in numer_full:
+            d, l = numer_full.split('m.', 1)
+            result["nr_domu"] = d.strip()
+            result["nr_lokalu"] = l.strip()
+        else:
+            result["nr_domu"] = numer_full.strip()
+    else:
+        # Jeśli nie udało się znaleźć numeru, wszystko trafia do ulicy
+        result["ulica"] = street_part
+
+    return result
+
+
+def fill_ewyp_pdf(case_state: CaseState, template_path: str = "EWYP.pdf") -> io.BytesIO:
+    """
+    Wypełnia formularz ZUS EWYP (wersja naprawiona: krótkie nazwy pól).
+    Rozróżnia strony, aby unikać konfliktów (np. Imię[0] na str 1 vs str 5).
+    """
+    reader = PdfReader(template_path)
+    writer = PdfWriter()
+    writer.append_pages_from_reader(reader)
+    
+    # Funkcje pomocnicze
+    def val(v): return str(v) if v is not None else ""
+
+    def date_val(iso_date: Optional[str]) -> str:
+        if not iso_date:
+            return ""
+        # Jeśli data jest w formacie YYYY-MM-DD (np. 2000-12-07)
+        parts = str(iso_date).split('-')
+        if len(parts) == 3 and len(parts[0]) == 4:
+            # Zwracamy DD-MM-YYYY (np. 07-12-2000)
+            return f"{parts[2]}{parts[1]}{parts[0]}"
+        return str(iso_date)
+    
+    # Parsowanie adresów
+    ah = parse_address_to_dict(case_state.address_home)   # Adres domowy (Page 1)
+    ac = parse_address_to_dict(case_state.address_correspondence) # Adres korespondencji (Page 2)
+    
+    # --- LOGIKA CHECKBOXÓW ---
+    def get_chk_pair(condition):
+        # Zwraca krotkę (wartość_dla_TAK, wartość_dla_NIE)
+        # W Twoim logu nie widać wartości eksportu (On/Yes), ale standardowo to /Yes i /Off
+        if condition: return ('/Yes', '/Off')
+        return ('/Off', '/Yes')
+
+    has_aid = case_state.first_aid_info is not None and len(str(case_state.first_aid_info)) > 2
+    chk_aid_tak, chk_aid_nie = get_chk_pair(has_aid)
+
+    has_eq = case_state.equipment_info is not None and len(str(case_state.equipment_info)) > 2
+    chk_eq_tak, chk_eq_nie = get_chk_pair(has_eq)
+
+    # --- PĘTLA PO STRONACH ---
+    # Definiujemy mapę pól ODDZIELNIE dla każdej strony (0-indexed),
+    # aby Imię[0] na str. 1 (poszkodowany) nie nadpisało Imię[0] na str. 5 (świadek).
+    
+    for page_num, page in enumerate(writer.pages):
+        # Słownik z danymi tylko dla TEJ konkretnej strony
+        page_map = {}
+
+        if page_num == 0:  # --- STRONA 1: DANE POSZKODOWANEGO ---
+            page_map = {
+                'PESEL[0]': val(case_state.pesel),
+                'Imię[0]': val(case_state.first_name),
+                'Nazwisko[0]': val(case_state.last_name),
+                'Dataurodzenia[0]': date_val(case_state.date_of_birth),
+                # Adres zamieszkania
+                'Ulica[0]': ah['ulica'],
+                'Numerdomu[0]': ah['nr_domu'],
+                'Numerlokalu[0]': ah['nr_lokalu'],
+                'Kodpocztowy[0]': ah['kod'],
+                'Poczta[0]': ah['poczta'],
+            }
+
+        elif page_num == 1: # --- STRONA 2: ADRES DZIAŁALNOŚCI ---
+            # Tutaj mapujemy dane firmy na pola Ulica2, itd.
+            page_map = {
+                'Ulica2[1]': ac['ulica'],
+                'Numerdomu2[1]': ac['nr_domu'],
+                'Numerlokalu2[1]': ac['nr_lokalu'],
+                'Kodpocztowy2[1]': ac['kod'],
+                'Poczta2[1]': ac['poczta'],
+            }
+
+        elif page_num == 2: # --- STRONA 3: CZAS I MIEJSCE WYPADKU ---
+            page_map = {
+                'Datawyp[0]': date_val(case_state.accident_date),
+                'Godzina[0]': val(case_state.accident_time),
+                'Miejscewyp[0]': val(case_state.accident_place),
+                'Godzina3A[0]': val(case_state.planned_work_start), # Rozpoczęcie
+                'Godzina3B[0]': val(case_state.planned_work_end),   # Zakończenie
+            }
+
+        elif page_num == 3: # --- STRONA 4: OPISY I CHECKBOXY ---
+            page_map = {
+                'Tekst4[0]': val(case_state.injury_type),           # Urazy
+                'Tekst5[0]': val(case_state.accident_description),  # Opis
+                'Tekst6[0]': val(case_state.first_aid_info),        # Info o pomocy
+                'Tekst7[0]': val(case_state.proceedings_info),      # Postępowanie
+                'Tekst8[0]': val(case_state.equipment_info),        # Maszyny
+                
+                # Checkboxy (Pierwsza pomoc)
+                'TAK6[0]': chk_aid_tak,
+                'NIE6[0]': chk_aid_nie,
+                
+                # Checkboxy (Maszyny)
+                'TAK8[0]': chk_eq_tak,
+                'NIE8[0]': chk_eq_nie,
+            }
+
+        elif page_num == 4: # --- STRONA 5: ŚWIADKOWIE ---
+            if case_state.witnesses:
+                # Świadek 1
+                w1 = case_state.witnesses[0]
+                aw1 = parse_address_to_dict(w1.address)
+                page_map.update({
+                    'Imię[0]': val(w1.first_name),
+                    'Nazwisko[0]': val(w1.last_name),
+                    'Ulica[0]': aw1['ulica'],
+                    'Numerdomu[0]': aw1['nr_domu'],
+                    'Numerlokalu[0]': aw1['nr_lokalu'],
+                    'Kodpocztowy[0]': aw1['kod'],
+                    'Poczta[0]': aw1['poczta'],
+                })
+                
+                # Świadek 2 (jeśli jest)
+                if len(case_state.witnesses) > 1:
+                    w2 = case_state.witnesses[1]
+                    aw2 = parse_address_to_dict(w2.address)
+                    # Wg loga na stronie 5 jest Imię[1], Nazwisko[1] oraz Ulica[1]
+                    page_map.update({
+                        'Imię[1]': val(w2.first_name),
+                        'Nazwisko[1]': val(w2.last_name),
+                        'Ulica[1]': aw2['ulica'],
+                        'Numerdomu[1]': aw2['nr_domu'],
+                        'Numerlokalu[1]': aw2['nr_lokalu'],
+                        'Kodpocztowy[1]': aw2['kod'],
+                        'Poczta[1]': aw2['poczta'],
+                    })
+
+        elif page_num == 5: # --- STRONA 6: DATA I PODPIS ---
+             page_map = {
+                 'Data[0]': date_val(case_state.accident_date) # lub date.today().isoformat()
+             }
+
+        # --- APLIKOWANIE DANYCH (LOW LEVEL) ---
+        if "/Annots" in page:
+            for annot in page["/Annots"]:
+                try:
+                    obj = annot.get_object()
+                    if "/T" in obj:
+                        key = obj["/T"]
+                        
+                        if key in page_map:
+                            val_to_set = page_map[key]
+                            
+                            # Logika dla Checkboxów vs Tekst
+                            if val_to_set in ['/Yes', '/Off']:
+                                obj[NameObject("/V")] = NameObject(val_to_set)
+                                obj[NameObject("/AS")] = NameObject(val_to_set)
+                            else:
+                                obj[NameObject("/V")] = TextStringObject(val_to_set)
+                            
+                            # KLUCZOWE: Usuwamy /AP, aby wymusić renderowanie tekstu
+                            if "/AP" in obj:
+                                del obj["/AP"]
+                except Exception:
+                    continue # Ignorujemy błędy pojedynczych pól
+
+    # --- FIX STRUKTURY FORMULARZA (GLOBALNY) ---
+    if "/AcroForm" not in writer.root_object:
+        writer.root_object[NameObject("/AcroForm")] = DictionaryObject()
+    
+    acroform = writer.root_object["/AcroForm"]
+    
+    # Usuwamy XFA (dynamiczny formularz), zostawiamy tylko nasze dane statyczne
+    if "/XFA" in acroform:
+        del acroform["/XFA"]
+    if "/XFA" in writer.root_object: # Czasem jest też w root
+        del writer.root_object["/XFA"]
+
+    # Wymuszamy na Adobe Readerze przeliczenie wyglądu
+    acroform[NameObject("/NeedAppearances")] = BooleanObject(True)
+
+    out = io.BytesIO()
+    writer.write(out)
+    out.seek(0)
+    return out
+
+
 @app.post("/api/case/download-documents")
 async def download_documents(case_state: CaseState):
     """
-    Generuje komplet dokumentów (Zawiadomienie DOCX/PDF, Wyjaśnienia DOCX/PDF)
-    i zwraca je jako jeden plik ZIP.
+    Generuje komplet dokumentów:
+    1. ZUS EWYP (PDF) - wypełniony danymi formularz
+    2. Wyjaśnienia (DOCX) - edytowalne
+    3. Wyjaśnienia (PDF) - załącznik
+    4. Wszystkie Dane z formularza
+    i zwraca je jako ZIP.
     """
     
-    # 1. Przygotuj bufory plików
     files_to_zip = []
-    actions = generate_post_accident_actions(case_state)
 
-    # --- Zawiadomienie DOCX ---
-    docx_notification = create_notification_docx(case_state)
-    files_to_zip.append(("zawiadomienie_o_wypadku.docx", docx_notification))
+    # 1. Zawiadomienie o wypadku (Oryginalny PDF ZUS)
+    try:
+        # Zakładamy, że plik EWYP.pdf leży w głównym katalogu
+        pdf_zus_content = fill_ewyp_pdf(case_state, template_path="EWYP.pdf")
+        files_to_zip.append(("ZUS_EWYP_Zgloszenie.pdf", pdf_zus_content))
+    except Exception as e:
+        print(f"Błąd wypełniania PDF ZUS: {e}")
+        # W razie błędu nie przerywamy, po prostu nie dodajemy tego pliku
+        # lub dodajemy pusty plik error.txt
+        pass
 
-    # --- Wyjaśnienia DOCX ---
-    # Generujemy tylko jeśli jest opis
+    # 2. Wyjaśnienia (DOCX) - zawsze warto mieć edytowalne
     if case_state.accident_description:
         docx_explanation = create_explanation_docx(case_state)
-        files_to_zip.append(("wyjasnienia_poszkodowanego.docx", docx_explanation))
+        files_to_zip.append(("Wyjasnienia_Poszkodowanego.docx", docx_explanation))
+        
+        # 3. Wyjaśnienia (PDF) - jako prosty załącznik
+        explanation_data = {
+            "--- WYJAŚNIENIA POSZKODOWANEGO ---": "",
+            "Imię i nazwisko": f"{case_state.first_name or ''} {case_state.last_name or ''}".strip() or None,
+            "Treść wyjaśnień": case_state.accident_description,
+            "Informacje dodatkowe": case_state.equipment_info,
+        }
+        # Używamy Twojej funkcji create_simple_pdf (upewnij się, że jest w kodzie)
+        pdf_explanation = create_simple_pdf("Załącznik - Wyjaśnienia", explanation_data)
+        files_to_zip.append(("Zalacznik_Wyjasnienia.pdf", pdf_explanation))
 
-    # --- PDFy (wersja uproszczona) ---
-    # Przygotowanie danych do zrzutu PDF zgodnie z widokiem formularza
     reporter_label = None
     if case_state.reporter_type == ReporterType.VICTIM:
         reporter_label = "Poszkodowany"
@@ -1441,36 +1698,20 @@ async def download_documents(case_state: CaseState):
     pdf_notification = create_simple_pdf("Zawiadomienie (Draft PDF)", notification_data)
     files_to_zip.append(("zawiadomienie_o_wypadku.pdf", pdf_notification))
 
-    if case_state.accident_description:
-        explanation_data = {
-            "--- WYJAŚNIENIA POSZKODOWANEGO ---": "",
-            "Imię i nazwisko": f"{case_state.first_name or ''} {case_state.last_name or ''}".strip() or None,
-            "Treść wyjaśnień": {"value": case_state.accident_description, "lines": 6},
-            "Informacje dodatkowe (BHP/maszyny)": {"value": case_state.equipment_info, "lines": 3},
-        }
-        pdf_explanation = create_simple_pdf("Wyjasnienia (Draft PDF)", explanation_data)
-        files_to_zip.append(("wyjasnienia.pdf", pdf_explanation))
-
-    # 2. Spakuj do ZIP
+    # --- Pakowanie do ZIP ---
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
         for filename, file_stream in files_to_zip:
-            # Upewnij się, że kursor jest na początku
-            # (choć create_... funkcje już to robią)
             file_stream.seek(0)
             zip_file.writestr(filename, file_stream.read())
 
     zip_buffer.seek(0)
 
-    # 3. Zwróć jako streaming response
-    filename = f"dokumenty_wypadkowe_{case_state.last_name or 'nieznany'}.zip"
+    # Nazwa pliku wynikowego
+    filename = f"dokumenty_wypadkowe_{case_state.last_name or 'draft'}.zip"
+    
     headers = {"Content-Disposition": f"attachment; filename={filename}"}
-    serialized = json.dumps(
-        [action.model_dump() for action in actions],
-        ensure_ascii=False,
-    )
-    headers["X-ZANT-Actions"] = base64.b64encode(serialized.encode("utf-8")).decode("ascii")
-
+    
     return StreamingResponse(
         zip_buffer,
         media_type="application/zip",
