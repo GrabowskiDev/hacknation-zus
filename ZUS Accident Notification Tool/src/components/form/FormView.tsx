@@ -24,7 +24,9 @@ const formatActionsForChat = (actions: ActionStep[]): string => {
       const displayedDocs = docs.slice(0, maxDocs);
       const hiddenCount = Math.max(docs.length - displayedDocs.length, 0);
       const docsLabel = displayedDocs.length
-        ? `${displayedDocs.join(", ")}${hiddenCount ? ` (+${hiddenCount} dok.)` : ""}`
+        ? `${displayedDocs.join(", ")}${
+            hiddenCount ? ` (+${hiddenCount} dok.)` : ""
+          }`
         : "brak dodatkowych wymagań";
 
       return [
@@ -150,7 +152,7 @@ function FormView() {
       ))}
 
       {/* Sekcja przycisku pobierania */}
-      <div className="mt-8 border-t pt-6 mb-10 flex justify-end">
+      <div className="border-t flex justify-end">
         <button
           onClick={handleDownload}
           disabled={isDownloading}
