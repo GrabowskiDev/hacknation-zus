@@ -8,6 +8,7 @@ import {
   AlertCircle,
   FileOutput,
 } from "lucide-react";
+import { useAccidentAnalysis } from "@/hooks/useAccidentAnalysis";
 
 // Teraz BackendResponse zwraca string w polu summary
 interface BackendResponse {
@@ -16,54 +17,15 @@ interface BackendResponse {
 }
 
 function OfficialView() {
-  const [files, setFiles] = useState<File[]>([]);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [markdownResult, setMarkdownResult] = useState<string | null>(null); // Tutaj trzymamy Markdown
-  const [error, setError] = useState<string | null>(null);
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      setFiles(Array.from(e.target.files));
-      setMarkdownResult(null);
-      setError(null);
-    }
-  };
-
-  const handleAnalyze = async () => {
-    if (files.length === 0) return;
-
-    setIsAnalyzing(true);
-    setError(null);
-    setMarkdownResult(null);
-
-    const formData = new FormData();
-    files.forEach((file) => formData.append("files", file));
-
-    try {
-      const response = await fetch(
-        "http://localhost:8000/api/ocr/summarize-accident-facts",
-        {
-          method: "POST",
-          body: formData,
-        }
-      );
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || "Błąd podczas analizy");
-      }
-
-      const data: BackendResponse = await response.json();
-
-      // Bezpośrednio przypisujemy tekst Markdowna
-      setMarkdownResult(data.summary);
-    } catch (err: any) {
-      console.error(err);
-      setError(err.message || "Wystąpił błąd.");
-    } finally {
-      setIsAnalyzing(false);
-    }
-  };
+  const {
+    files,
+    isAnalyzing,
+    markdownResult,
+    error,
+    handleFileChange,
+    handleAnalyze,
+    copyToClipboard,
+  } = useAccidentAnalysis();
 
   return (
     <main className="flex flex-col justify-center h-screen w-full bg-slate-50 p-4 lg:p-8 overflow-y-auto custom-scrollbar">
@@ -146,7 +108,7 @@ function OfficialView() {
         </div>
 
         {/* PRAWA KOLUMNA: Renderowanie Markdown (Większa - 8/12) */}
-        <div className="lg:col-span-8 text-black overflow-scroll">
+        <div className="lg:col-span-8 text-black">
           {!markdownResult && !isAnalyzing && (
             <div className="h-full flex flex-col items-center justify-center text-slate-400 border-2 border-dashed border-slate-200 rounded-2xl min-h-[400px]">
               <FileOutput size={48} className="mb-4 opacity-20" />
@@ -164,7 +126,7 @@ function OfficialView() {
           )}
 
           {markdownResult && (
-            <div className="bg-white rounded-2xl shadow-md border border-slate-200 min-h-[600px] flex flex-col animate-in fade-in slide-in-from-bottom-4 h-128 duration-500">
+            <div className="bg-white rounded-2xl shadow-md border border-slate-200 min-h-[600px] flex flex-col animate-in fade-in slide-in-from-bottom-4 pb-4 h-128 duration-500">
               {/* Pasek narzędzi dokumentu */}
               <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 rounded-t-2xl">
                 <span className="text-sm font-semibold text-slate-600 uppercase tracking-wider">
@@ -176,7 +138,7 @@ function OfficialView() {
               </div>
 
               {/* OBSZAR RENDERINGU MARKDOWN */}
-              <div className="p-8 lg:p-12">
+              <div className="p-8 lg:p-12 overflow-scroll">
                 <article className="prose prose-slate prose-headings:text-slate-800 prose-p:text-slate-600 prose-strong:text-slate-900 prose-li:text-slate-600 max-w-none">
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>
                     {markdownResult}
