@@ -640,6 +640,7 @@ def extract_case_state_with_llm(
                     "Twoje zadanie:\n"
                     "- wywnioskuj i uzupełnij tylko te pola, które można "
                     "jednoznacznie określić na podstawie rozmowy,\n"
+                    "- adresy address_home oraz address_correspondence zapisuj w formacie 'ulica nr/lokal, 00-000 Miasto' (np. 'ul. Przykładowa 12/4, 12-343 Warszawa'),\n"
                     "- pozostałe pola pozostaw bez zmian (przepisz ich "
                     "dotychczasową wartość),\n"
                     "- odpowiedz wyłącznie JSON-em pasującym do schematu CaseState."
@@ -740,6 +741,39 @@ def generate_post_accident_actions(case_state: CaseState) -> List[ActionStep]:
         print(f"Błąd generowania zaleceń: {e}")
         return []
 
+PESEL_REGEX = re.compile(r"^\d{11}$")
+POSTAL_REGEX = re.compile(r"^\d{2}-\d{3}$")
+NIP_REGEX = re.compile(r"^\d{10}$")
+REGON_REGEX = re.compile(r"^(\d{9}|\d{14})$")
+PKD_REGEX = re.compile(r"^\d{2}\.\d{2}\.[A-Z]$", re.IGNORECASE)
+
+def check_validation_of_fields(state: CaseState) -> list[str]:
+    alerts: list[str] = []
+    if state.pesel and not PESEL_REGEX.match(state.pesel):
+        alerts.append("PESEL musi mieć dokładnie 11 cyfr.")
+    if state.nip:
+        normalized_nip = state.nip.replace(" ", "").replace("-", "")
+        if not NIP_REGEX.match(normalized_nip):
+            alerts.append("NIP powinien zawierać 10 cyfr (bez spacji i kresek).")
+    if state.regon:
+        normalized_regon = state.regon.replace(" ", "").replace("-", "")
+        if not REGON_REGEX.match(normalized_regon):
+            alerts.append("REGON powinien mieć 9 lub 14 cyfr.")
+    if state.pkd:
+        normalized_pkd = state.pkd.strip().upper()
+        if not PKD_REGEX.match(normalized_pkd):
+            alerts.append("PKD wpisz w formacie 00.00.X (np. 62.01.Z).")
+    if state.address_home:
+        match = POSTAL_REGEX.search(state.address_home)
+        if not match:
+            alerts.append("Adres zamieszkania powinien zawierać kod pocztowy w formacie 00-000.")
+    return alerts
+
+def prepend_validation_warnings(reply: str, alerts: list[str]) -> str:
+    if not alerts:
+        return reply
+    warning = "Uwaga: wykryto problemy z formatem danych. Sprawdź proszę:\n- " + "\n- ".join(alerts)
+    return f"{warning}\n\n{reply}" if reply else warning
 
 def run_assistant_pipeline(
     case_id: str,
@@ -777,6 +811,10 @@ def run_assistant_pipeline(
         today=today,
         conversation_history=history,
     )
+
+    case_state.address_home = normalize_address(case_state.address_home)
+    case_state.address_correspondence = normalize_address(case_state.address_correspondence)
+    validation_alerts = check_validation_of_fields(case_state)
 
     # Wyznacz pola, których użytkownik nie chce podawać – na podstawie historii + bieżącej odpowiedzi.
     skipped_from_history = set(infer_skipped_fields_from_history(history))
@@ -936,12 +974,16 @@ def run_assistant_pipeline(
             "Poniżej znajdziesz listę kroków, które powinieneś teraz podjąć."
         )
 
+        assistant_reply = prepend_validation_warnings(assistant_reply, validation_alerts)
+
         return AssistantMessageResponse(
             assistant_reply=assistant_reply,
             missing_fields=missing,
             case_state_preview=case_state,
             recommended_actions=actions
         )
+
+    assistant_reply = prepend_validation_warnings(assistant_reply, validation_alerts)
 
     return AssistantMessageResponse(
         assistant_reply=assistant_reply,
@@ -1008,8 +1050,8 @@ def evaluate_case_from_documents(
                     "5) wydać jednoznaczną opinię, czy zdarzenie jest wypadkiem podczas prowadzenia "
                     "pozarolniczej działalności gospodarczej,\n"
                     "6) szczegółowo uzasadnić swoją opinię,\n"
-                    "7) przygotować projekt karty wypadku (w formie tekstowej, z polami zbliżonymi do "
-                    "formularza ZUS, z wypełnionymi danymi na podstawie ustalonego stanu faktycznego).\n\n"
+                    "7) przygotować projekt karty wypadku (accident_card_draft) – może być jako dobrze "
+                    "sformatowany tekst z nagłówkami i polami.\n\n"
                     "Zawsze zwracaj wynik w formacie JSON ściśle zgodnym ze schematem CaseEvaluationResult."
                 ),
             ),
@@ -1413,6 +1455,35 @@ def parse_address_to_dict(address_str: Optional[str]) -> dict:
         result["ulica"] = street_part
 
     return result
+
+
+def normalize_address(address: Optional[str]) -> Optional[str]:
+    """Formatuje adres do postaci 'Ulica 1/2, 00-000 Miasto'"""
+    if not address or not address.strip():
+        return address
+
+    parts = parse_address_to_dict(address)
+    if not any(parts.values()):
+        return address.strip()
+
+    street = parts["ulica"].strip()
+    house = parts["nr_domu"].strip()
+    flat = parts["nr_lokalu"].strip()
+    postal = parts["kod"].strip()
+    city = parts["poczta"].strip()
+
+    street_block = street
+    if house:
+        number = house
+        if flat:
+            number = f"{number}/{flat}"
+        street_block = f"{street} {number}".strip()
+
+    locality = " ".join(item for item in [postal, city] if item).strip()
+
+    pieces = [p for p in [street_block, locality] if p]
+    normalized = ", ".join(pieces)
+    return normalized or address.strip()
 
 
 def fill_ewyp_pdf(case_state: CaseState, template_path: str = "EWYP.pdf") -> io.BytesIO:
