@@ -180,38 +180,21 @@ def summarize_accident_facts_from_pdfs(pdf_files: List[bytes]) -> str:
 
 def build_filled_card_text_from_summary(summary_text: str) -> str:
     """
-    Wczytuje fragmenty wzoru karty z plików tekstowych w katalogu głównym
-    (poczatek.txt, pytanie1.txt, srodek.txt, pytanie2.txt, pytanie3.txt,
-    pytanie4.txt, koniec.txt), przekazuje je wraz ze streszczeniem faktów
-    do LLM i prosi o uzupełnienie TYLKO kropek tam, gdzie odpowiedź
-    jednoznacznie wynika z summary.
+    Wczytuje wzór karty wypadku z pliku Markdown `karta_wypadku.md`
+    z katalogu głównego projektu, przekazuje go wraz ze streszczeniem
+    faktów do LLM i prosi o uzupełnienie TYLKO kropek tam, gdzie
+    odpowiedź jednoznacznie wynika ze streszczenia.
 
-    Zwraca jeden sklejony tekst:
-    poczatek + pytanie1 + srodek + pytanie2 + pytanie3 + pytanie4 + koniec
-    po uzupełnieniu.
+    Zwraca kompletny tekst karty w formacie Markdown.
     """
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    parts = []
-    filenames = [
-        "poczatek.txt",
-        "pytanie1.txt",
-        "srodek.txt",
-        "pytanie2.txt",
-        "pytanie3.txt",
-        "pytanie4.txt",
-        "koniec.txt",
-    ]
-
-    for name in filenames:
-        path = os.path.join(project_root, name)
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                parts.append(f.read())
-        except Exception:
-            # Jeśli któregoś pliku brakuje, traktujemy go jak pusty fragment.
-            parts.append("")
-
-    template_text = "\n".join(parts)
+    template_path = os.path.join(project_root, "karta_wypadku.md")
+    try:
+        with open(template_path, "r", encoding="utf-8") as f:
+            template_text = f.read()
+    except Exception:
+        # Jeśli szablonu brakuje, nie próbujemy dalej przetwarzać.
+        template_text = ""
 
     llm = _get_llm()
     if llm is None or not summary_text.strip():
@@ -223,14 +206,16 @@ def build_filled_card_text_from_summary(summary_text: str) -> str:
             (
                 "system",
                 (
-                    "Masz zestaw fragmentów tekstowego wzoru karty wypadku, "
-                    "sklejony w jeden ciąg, oraz streszczenie faktów wypadku.\n"
+                    "Masz szablon karty wypadku w formacie Markdown "
+                    "oraz streszczenie faktów wypadku.\n"
                     "Twoje zadanie:\n"
-                    "- uzupełnij TYLKO te miejsca z kropkami (ciągi typu '.....'), "
+                    "- uzupełnij TYLKO te miejsca oznaczone ciągami kropek "
+                    "(np. '....................' lub podobne), "
                     "dla których odpowiedź jednoznacznie wynika ze streszczenia faktów,\n"
                     "- ZACHOWAJ treść pytań i reszty tekstu bez zmian (nie usuwaj nagłówków, numeracji, objaśnień),\n"
                     "- tam, gdzie nie da się nic dopowiedzieć na podstawie streszczenia, "
                     "pozostaw kropki dokładnie tak jak są,\n"
+                    "- zachowaj format Markdown (nagłówki, listy itp.) w niezmienionej strukturze,\n"
                     "- odpowiedz WYŁĄCZNIE gotowym tekstem karty po uzupełnieniu, bez komentarzy ani metadanych."
                 ),
             ),
@@ -238,7 +223,7 @@ def build_filled_card_text_from_summary(summary_text: str) -> str:
                 "human",
                 (
                     "Streszczenie faktów wypadku:\n{summary}\n\n"
-                    "Sklejony tekst z plików (poczatek/pytania/srodek/koniec):\n{template}\n\n"
+                    "Szablon karty wypadku (Markdown):\n{template}\n\n"
                     "Zwróć kompletny tekst po uzupełnieniu możliwych pól."
                 ),
             ),
