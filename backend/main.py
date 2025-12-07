@@ -460,6 +460,9 @@ def message_looks_like_skip(text: str) -> bool:
         "pomiń",
         "pomin",
         "pomijamy",
+        "pomiń kategorię",
+        "idź dalej z kategorią",
+        "następna kategoria"
     ]
     return any(p in t for p in phrases)
 
@@ -477,8 +480,15 @@ def message_asks_next_category(text: str) -> bool:
         "kolejna kategoria",
         "idź dalej z kategorią",
         "idz dalej z kategoria",
+        "pomiń kategorię",
+        "pomijam tę kategorię",
+        "chcę pominąć kategorię",
+        "chcialbym pominac te kategorie",
+        "chciałbym pominąć tę kategorię",
+        "przejdź dalej bez tej kategorii",
+        "przejdz dalej bez tej kategorii",
     ]
-    return any(p in t for p in phrases)
+    return any(p.lower() in t.lower() for p in phrases)
 
 
 def extract_category_label_from_text(text: str) -> Optional[str]:
@@ -640,6 +650,7 @@ def extract_case_state_with_llm(
                     "Twoje zadanie:\n"
                     "- wywnioskuj i uzupełnij tylko te pola, które można "
                     "jednoznacznie określić na podstawie rozmowy,\n"
+                    "- pole reporter_type może mieć tylko wartości 'victim' (poszkodowany) lub 'proxy' (pełnomocnik),\n"
                     "- adresy address_home oraz address_correspondence zapisuj w formacie 'ulica nr/lokal, 00-000 Miasto' (np. 'ul. Przykładowa 12/4, 12-343 Warszawa'),\n"
                     "- pozostałe pola pozostaw bez zmian (przepisz ich "
                     "dotychczasową wartość),\n"
@@ -742,7 +753,7 @@ def generate_post_accident_actions(case_state: CaseState) -> List[ActionStep]:
         return []
 
 PESEL_REGEX = re.compile(r"^\d{11}$")
-POSTAL_REGEX = re.compile(r"^\d{2}-\d{3}$")
+POSTAL_REGEX = re.compile(r"\d{2}-\d{3}")
 NIP_REGEX = re.compile(r"^\d{10}$")
 REGON_REGEX = re.compile(r"^(\d{9}|\d{14})$")
 PKD_REGEX = re.compile(r"^\d{2}\.\d{2}\.[A-Z]$", re.IGNORECASE)
@@ -971,7 +982,7 @@ def run_assistant_pipeline(
         
         assistant_reply = (
             "Dziękuję, to wszystkie pytania o dane wymagane w formularzu. "
-            "Poniżej znajdziesz listę kroków, które powinieneś teraz podjąć."
+            "Po pobraniu dokumentów wyślę ci listę kroków, które powinieneś teraz podjąć."
         )
 
         assistant_reply = prepend_validation_warnings(assistant_reply, validation_alerts)
@@ -1694,6 +1705,7 @@ async def download_documents(case_state: CaseState):
     """
     
     files_to_zip = []
+    actions = generate_post_accident_actions(case_state)
 
     # 1. Zawiadomienie o wypadku (Oryginalny PDF ZUS)
     try:
@@ -1801,6 +1813,9 @@ async def download_documents(case_state: CaseState):
     filename = f"dokumenty_wypadkowe_{case_state.last_name or 'draft'}.zip"
     
     headers = {"Content-Disposition": f"attachment; filename={filename}"}
+
+    serialized = json.dumps([action.model_dump() for action in actions], ensure_ascii=False)
+    headers["X-ZANT-Actions"] = base64.b64encode(serialized.encode("utf-8")).decode("ascii")
     
     return StreamingResponse(
         zip_buffer,
