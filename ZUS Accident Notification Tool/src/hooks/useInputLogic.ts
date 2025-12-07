@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { ChangeEvent, FocusEvent } from "react";
+import type { ChangeEvent } from "react";
 import type { FormFieldConfig } from "@/types";
 import { validateField } from "@/utils/validation";
 
@@ -16,7 +16,7 @@ export const useInputLogic = (
   const [isFocused, setIsFocused] = useState(false);
 
   // Dodajemy typowanie zdarzenia FocusEvent<FormElement>
-  const handleBlur = (e?: FocusEvent<FormElement>) => {
+  const handleBlur = () => {
     setIsFocused(false);
     const isValid = validateField(value, config.regex);
     setError(!isValid);
