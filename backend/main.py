@@ -1235,6 +1235,7 @@ def remove_polish_chars(text: str) -> str:
     # FPDF (standard fonts) obsługuje latin-1.
     return text.encode('latin-1', 'replace').decode('latin-1')
 
+
 def create_simple_pdf(title: str, content_dict: dict) -> io.BytesIO:
     """
     Tworzy prosty PDF. Może zajmować wiele stron.
@@ -1354,6 +1355,24 @@ def create_simple_pdf(title: str, content_dict: dict) -> io.BytesIO:
     output.write(pdf.output())
     output.seek(0)
     return output
+
+
+def create_pdf_from_markdown(markdown_text: str, title: str = "Karta wypadku") -> io.BytesIO:
+    """
+    Bardzo prosta konwersja Markdown -> PDF oparta na istniejącym
+    helperze `create_simple_pdf`.
+
+    Nie próbuje odwzorować całego formatowania Markdown – traktuje
+    wypełnioną kartę jako jeden długi blok tekstu w PDF.
+    """
+    content = {
+        "Treść karty (Markdown)": {
+            "value": markdown_text,
+            # Kilka dodatkowych linii na ręczne dopiski
+            "lines": 10,
+        }
+    }
+    return create_simple_pdf(title, content)
 
 
 # Dodatkowe wypełniajace EWYP
@@ -1746,8 +1765,20 @@ async def summarize_accident_facts(files: List[UploadFile] = File(...)) -> dict:
     except Exception as exc:  # pragma: no cover - defensive
         raise HTTPException(status_code=500, detail="Summarization failed") from exc
 
+    pdf_base64: Optional[str] = None
+    try:
+        pdf_buffer = create_pdf_from_markdown(
+            filled_card_text,
+            title="Karta wypadku (draft)",
+        )
+        pdf_base64 = base64.b64encode(pdf_buffer.getvalue()).decode("ascii")
+    except Exception:
+        # Jeśli PDF z jakiegoś powodu się nie wygeneruje, nie blokujemy całej odpowiedzi.
+        pdf_base64 = None
+
     return {
         "summary": summary,
         "file_count": len(contents_list),
         "accident_card_filled_text": filled_card_text,
+        "accident_card_pdf_base64": pdf_base64,
     }
